@@ -1,8 +1,114 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
 
+	// ---------------------------------------------------------------------------
+	// MARKET DATA — single source of truth (V1 mock; swap for API/store later)
+	// ---------------------------------------------------------------------------
+
+	/** US rates & funding — keyed by symbol for tenor lookups and spread legs */
+	const US_RATES = {
+		EFFR: { label: 'EFFR', yield: 3.65, change: 0 },
+		SOFR: { label: 'SOFR', yield: 3.65, change: 0.02 },
+		'3M': { label: 'US 3-Month T-Bill', yield: 4.15, change: 0.01 },
+		US2Y: { label: 'US 2-Year Treasury', yield: 4.38, change: -0.02 },
+		US10Y: { label: 'US 10-Year Treasury', yield: 4.43, change: -0.04 },
+		US30Y: { label: 'US 30-Year Treasury', yield: 4.95, change: -0.03 }
+	} as const;
+
+	type UsRateKey = keyof typeof US_RATES;
+
+	const US_RATE_KEYS: UsRateKey[] = ['EFFR', 'SOFR', '3M', 'US2Y', 'US10Y', 'US30Y'];
+
+	/** Add a row here to register a new curve spread (long − short) */
+	const SPREAD_DEFS: {
+		id: string;
+		label: string;
+		longLeg: UsRateKey;
+		shortLeg: UsRateKey;
+	}[] = [
+		{ id: '2s10s', label: '2s10s Spread', longLeg: 'US10Y', shortLeg: 'US2Y' },
+		{ id: '10s30s', label: '10s30s Spread', longLeg: 'US30Y', shortLeg: 'US10Y' }
+	];
+
+	const CURVE_TENORS: { key: UsRateKey; tenor: string }[] = [
+		{ key: '3M', tenor: '3M' },
+		{ key: 'US2Y', tenor: '2Y' },
+		{ key: 'US10Y', tenor: '10Y' },
+		{ key: 'US30Y', tenor: '30Y' }
+	];
+
+	type PriceFormat = 'index' | 'usd' | 'fx';
+
+	type PricedAsset = {
+		symbol: string;
+		label: string;
+		currentPrice: number;
+		previousClose: number;
+		format: PriceFormat;
+	};
+
+	type YieldAsset = {
+		symbol: string;
+		label: string;
+		currentYield: number;
+		previousClose: number;
+	};
+
+	/** Equities — change derived: ((current − previous) / previous) × 100 */
+	const GLOBAL_EQUITIES: PricedAsset[] = [
+		{ symbol: 'SPX', label: 'S&P 500', currentPrice: 5300.25, previousClose: 5276.524138, format: 'index' },
+		{ symbol: 'NDX', label: 'NASDAQ 100', currentPrice: 18500.5, previousClose: 18386.474557, format: 'index' },
+		{ symbol: 'DJI', label: 'Dow Jones', currentPrice: 39120.0, previousClose: 39166.980376, format: 'index' },
+		{ symbol: 'UKX', label: 'FTSE 100', currentPrice: 8230.1, previousClose: 8215.312438, format: 'index' },
+		{ symbol: 'NSE', label: 'Nifty 50', currentPrice: 23200.4, previousClose: 23363.948639, format: 'index' },
+		{ symbol: 'CSI', label: 'CSI 300', currentPrice: 4104.33, previousClose: 4081.880656, format: 'index' }
+	];
+
+	/** Commodities & FX — percent change derived from price vs previous close */
+	const COMMODITIES_FX: PricedAsset[] = [
+		{ symbol: 'GC', label: 'Gold', currentPrice: 2345.6, previousClose: 2331.367656, format: 'usd' },
+		{ symbol: 'SI', label: 'Silver', currentPrice: 29.45, previousClose: 29.101778657, format: 'usd' },
+		{ symbol: 'CL', label: 'WTI Crude', currentPrice: 78.45, previousClose: 79.572370424, format: 'usd' },
+		{ symbol: 'DXY', label: 'US Dollar Index', currentPrice: 104.65, previousClose: 104.503695827, format: 'fx' },
+		{ symbol: 'USDJPY', label: 'USD/JPY', currentPrice: 156.2, previousClose: 155.500248879, format: 'fx' },
+		{ symbol: 'USDINR', label: 'USD/INR', currentPrice: 83.55, previousClose: 83.616893515, format: 'fx' }
+	];
+
+	/** Global sovereign 10Y — absolute change: currentYield − previousClose */
+	const GLOBAL_SOVEREIGN: YieldAsset[] = [
+		{ symbol: 'DE10Y', label: 'Bunds 10Y (Germany)', currentYield: 2.45, previousClose: 2.46 },
+		{ symbol: 'JP10Y', label: 'JGB 10Y (Japan)', currentYield: 1.02, previousClose: 0.99 },
+		{ symbol: 'AU10Y', label: 'Australia 10Y', currentYield: 4.25, previousClose: 4.27 }
+	];
+
+	const MARKET_DATA = {
+		layout: {
+			primaryRow: ['usRatesFunding', 'globalEquities', 'commoditiesFx'] as const,
+			secondaryRow: ['globalSovereign'] as const
+		},
+		sections: {
+			usRatesFunding: {
+				title: 'US RATES & FUNDING'
+			},
+			yieldSpreads: {
+				title: 'YIELD SPREADS'
+			},
+			globalSovereign: {
+				title: 'GLOBAL SOVEREIGN 10Y'
+			},
+			globalEquities: {
+				title: 'GLOBAL EQUITIES'
+			},
+			commoditiesFx: {
+				title: 'COMMODITIES & GLOBAL FX'
+			}
+		}
+	} as const;
+
+	type ChangeMode = 'pct' | 'abs';
+
 	type Change = {
-		mode: 'pct' | 'abs' | 'bp';
+		mode: ChangeMode;
 		value: number;
 	};
 
@@ -24,103 +130,144 @@
 		yield: number;
 	};
 
+	const fmtNum = (n: number, decimals: number) =>
+		n.toLocaleString('en-US', {
+			minimumFractionDigits: decimals,
+			maximumFractionDigits: decimals
+		});
+
+	const pctChange = (current: number, previous: number) =>
+		previous === 0 ? 0 : ((current - previous) / previous) * 100;
+
+	const absYieldChange = (currentYield: number, previousClose: number) => currentYield - previousClose;
+
+	const formatPricedDisplay = (asset: PricedAsset): string => {
+		switch (asset.format) {
+			case 'index':
+				return fmtNum(asset.currentPrice, 2);
+			case 'usd':
+				return `$${fmtNum(asset.currentPrice, 2)}`;
+			case 'fx':
+				return fmtNum(asset.currentPrice, 2);
+		}
+	};
+
+	const toPricedTicker = (asset: PricedAsset): Ticker => ({
+		symbol: asset.symbol,
+		label: asset.label,
+		value: formatPricedDisplay(asset),
+		change: { mode: 'pct', value: pctChange(asset.currentPrice, asset.previousClose) }
+	});
+
+	const toYieldTicker = (asset: YieldAsset): Ticker => ({
+		symbol: asset.symbol,
+		label: asset.label,
+		value: `${asset.currentYield.toFixed(2)}%`,
+		change: { mode: 'abs', value: absYieldChange(asset.currentYield, asset.previousClose) }
+	});
+
+	const toUsRateTicker = (key: UsRateKey): Ticker => {
+		const r = US_RATES[key];
+		return {
+			symbol: key,
+			label: r.label,
+			value: `${r.yield.toFixed(2)}%`,
+			change: { mode: 'abs', value: r.change }
+		};
+	};
+
+	const usRatesSection = $derived<MarketSection>({
+		id: 'usRatesFunding',
+		title: MARKET_DATA.sections.usRatesFunding.title,
+		items: US_RATE_KEYS.map((key) => toUsRateTicker(key))
+	});
+
+	const equitiesSection = $derived<MarketSection>({
+		id: 'globalEquities',
+		title: MARKET_DATA.sections.globalEquities.title,
+		items: GLOBAL_EQUITIES.map((a) => toPricedTicker(a))
+	});
+
+	const commoditiesFxSection = $derived<MarketSection>({
+		id: 'commoditiesFx',
+		title: MARKET_DATA.sections.commoditiesFx.title,
+		items: COMMODITIES_FX.map((a) => toPricedTicker(a))
+	});
+
+	const sovereignSection = $derived<MarketSection>({
+		id: 'globalSovereign',
+		title: MARKET_DATA.sections.globalSovereign.title,
+		items: GLOBAL_SOVEREIGN.map((a) => toYieldTicker(a))
+	});
+
+	const computedSpreadTickers = $derived<Ticker[]>(
+		SPREAD_DEFS.map((def) => {
+			const long = US_RATES[def.longLeg];
+			const short = US_RATES[def.shortLeg];
+			const spread = long.yield - short.yield;
+			const spreadChange = long.change - short.change;
+			return {
+				symbol: def.id,
+				label: def.label,
+				value: `${spread.toFixed(2)}%`,
+				change: { mode: 'abs', value: spreadChange }
+			};
+		})
+	);
+
+	const primaryRow = $derived<MarketSection[]>([
+		usRatesSection,
+		equitiesSection,
+		commoditiesFxSection
+	]);
+
+	const secondaryRow = $derived<MarketSection[]>([sovereignSection]);
+
+	const curve = $derived<CurvePoint[]>(
+		CURVE_TENORS.map(({ key, tenor }) => ({
+			tenor,
+			yield: US_RATES[key].yield
+		}))
+	);
+
 	const fmtSigned = (n: number, digits = 2) => `${n >= 0 ? '+' : ''}${n.toFixed(digits)}`;
-	const fmtSignedBp = (n: number, digits = 3) => `${n >= 0 ? '+' : ''}${n.toFixed(digits)}`;
 
 	const fmtChg = (c: Change) => {
 		if (c.mode === 'pct') return `${fmtSigned(c.value, 2)}%`;
-		if (c.mode === 'bp') return fmtSignedBp(c.value, 3);
 		return fmtSigned(c.value, 2);
 	};
 
 	const clsFor = (c: Change) => {
-		if (c.value > 0) return 'text-emerald-300';
-		if (c.value < 0) return 'text-rose-300';
+		if (c.value > 0) return 'text-emerald-500';
+		if (c.value < 0) return 'text-rose-500';
 		return 'text-zinc-300';
 	};
-
-	const usRatesFunding: Ticker[] = [
-		{ symbol: 'EFFR', label: 'EFFR', value: '3.65%', change: { mode: 'abs', value: 0 } },
-		{ symbol: 'SOFR', label: 'SOFR', value: '3.65%', change: { mode: 'abs', value: 0.02 } },
-		{ symbol: '3M', label: 'US 3-Month T-Bill', value: '4.15%', change: { mode: 'abs', value: 0.01 } },
-		{ symbol: 'US2Y', label: 'US 2-Year Treasury', value: '4.38%', change: { mode: 'abs', value: -0.02 } },
-		{ symbol: 'US10Y', label: 'US 10-Year Treasury', value: '4.43%', change: { mode: 'abs', value: -0.04 } },
-		{ symbol: 'US30Y', label: 'US 30-Year Treasury', value: '4.95%', change: { mode: 'abs', value: -0.03 } }
-	];
-
-	const yieldSpreads: Ticker[] = [
-		{ symbol: '2s10s', label: '2s10s Spread', value: '0.05%', change: { mode: 'abs', value: -0.02 } },
-		{ symbol: '10s30s', label: '10s30s Spread', value: '0.52%', change: { mode: 'abs', value: 0.01 } }
-	];
-
-	const globalSovereign: Ticker[] = [
-		{ symbol: 'DE10Y', label: 'Bunds 10Y (Germany)', value: '2.45%', change: { mode: 'abs', value: -0.01 } },
-		{ symbol: 'JP10Y', label: 'JGB 10Y (Japan)', value: '1.02%', change: { mode: 'abs', value: 0.03 } },
-		{ symbol: 'AU10Y', label: 'Australia 10Y', value: '4.25%', change: { mode: 'abs', value: -0.02 } }
-	];
-
-	const globalEquities: Ticker[] = [
-		{ symbol: 'SPX', label: 'S&P 500', value: '5,300.25', change: { mode: 'pct', value: 0.45 } },
-		{ symbol: 'NDX', label: 'NASDAQ 100', value: '18,500.50', change: { mode: 'pct', value: 0.62 } },
-		{ symbol: 'DJI', label: 'Dow Jones', value: '39,120.00', change: { mode: 'pct', value: -0.12 } },
-		{ symbol: 'UKX', label: 'FTSE 100', value: '8,230.10', change: { mode: 'pct', value: 0.18 } },
-		{ symbol: 'NSE', label: 'Nifty 50', value: '23,200.40', change: { mode: 'pct', value: -0.7 } },
-		{ symbol: 'CSI', label: 'CSI 300', value: '4,104.33', change: { mode: 'pct', value: 0.55 } }
-	];
-
-	const commoditiesFx: Ticker[] = [
-		{ symbol: 'GC', label: 'Gold', value: '$2,345.60', change: { mode: 'pct', value: 0.61 } },
-		{ symbol: 'SI', label: 'Silver', value: '$29.45', change: { mode: 'pct', value: 1.2 } },
-		{ symbol: 'CL', label: 'WTI Crude', value: '$78.45', change: { mode: 'pct', value: -1.41 } },
-		{ symbol: 'DXY', label: 'US Dollar Index', value: '104.65', change: { mode: 'pct', value: 0.14 } },
-		{ symbol: 'USDJPY', label: 'USD/JPY', value: '156.20', change: { mode: 'pct', value: 0.45 } },
-		{ symbol: 'USDINR', label: 'USD/INR', value: '83.55', change: { mode: 'pct', value: -0.08 } }
-	];
-
-	const primaryRow: MarketSection[] = [
-		{ id: 'us-rates', title: 'US RATES & FUNDING', items: usRatesFunding },
-		{ id: 'equities', title: 'GLOBAL EQUITIES', items: globalEquities },
-		{ id: 'commodities-fx', title: 'COMMODITIES & GLOBAL FX', items: commoditiesFx }
-	];
-
-	const secondaryRow: MarketSection[] = [
-		{ id: 'spreads', title: 'YIELD SPREADS', items: yieldSpreads },
-		{ id: 'sovereign', title: 'GLOBAL SOVEREIGN 10Y', items: globalSovereign }
-	];
-
-	const sections = [...primaryRow, ...secondaryRow];
-
-	const curve: CurvePoint[] = [
-		{ tenor: '3M', yield: 4.15 },
-		{ tenor: '2Y', yield: 4.38 },
-		{ tenor: '10Y', yield: 4.43 },
-		{ tenor: '30Y', yield: 4.95 }
-	];
 
 	const w = 720;
 	const h = 180;
 	const padX = 16;
 	const padY = 14;
 
-	const minY = Math.min(...curve.map((p) => p.yield));
-	const maxY = Math.max(...curve.map((p) => p.yield));
-	const rangeY = Math.max(0.0001, maxY - minY);
+	const minY = $derived(Math.min(...curve.map((p) => p.yield)));
+	const maxY = $derived(Math.max(...curve.map((p) => p.yield)));
+	const rangeY = $derived(Math.max(0.0001, maxY - minY));
 
-	const xAt = (i: number) => padX + (i * (w - padX * 2)) / Math.max(1, curve.length - 1);
-	const yAt = (v: number) => {
-		const t = (v - minY) / rangeY;
+	const xAt = (i: number, len: number) => padX + (i * (w - padX * 2)) / Math.max(1, len - 1);
+	const yAt = (v: number, min: number, range: number) => {
+		const t = (v - min) / range;
 		return padY + (1 - t) * (h - padY * 2);
 	};
 
-	const pathD = curve
-		.map((p, i) => `${i === 0 ? 'M' : 'L'} ${xAt(i).toFixed(2)} ${yAt(p.yield).toFixed(2)}`)
-		.join(' ');
+	const pathD = $derived(
+		curve
+			.map(
+				(p, i) =>
+					`${i === 0 ? 'M' : 'L'} ${xAt(i, curve.length).toFixed(2)} ${yAt(p.yield, minY, rangeY).toFixed(2)}`
+			)
+			.join(' ')
+	);
 
-	const invLevel = (() => {
-		const a = curve.find((p) => p.tenor === '2Y')?.yield ?? 0;
-		const b = curve.find((p) => p.tenor === '10Y')?.yield ?? 0;
-		return (b - a) * 100;
-	})();
+	const invLevel = $derived((US_RATES.US10Y.yield - US_RATES.US2Y.yield) * 100);
 
 	const headerTime = () => {
 		const d = new Date();
@@ -154,7 +301,11 @@
 			hour12: false
 		}).formatToParts(d);
 
-	const tickerItems = sections.flatMap((s) => s.items);
+	const tickerItems = $derived([
+		...primaryRow.flatMap((s) => s.items),
+		...computedSpreadTickers,
+		...secondaryRow.flatMap((s) => s.items)
+	]);
 
 	let now = headerTime();
 	let ny = 'NY: --:--:--';
@@ -190,9 +341,9 @@
 	onDestroy(() => clearInterval(interval));
 </script>
 
-<main class="min-h-screen bg-zinc-900 text-zinc-100">
+<main class="min-h-screen bg-zinc-950 text-zinc-100">
 	<!-- Clock & Market Status banner -->
-	<div class="border-b border-zinc-800 bg-zinc-900">
+	<div class="border-b border-zinc-800 bg-zinc-950">
 		<div class="mx-auto max-w-[1600px] px-3 py-1">
 			<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-mono text-zinc-300">
 				<div class="flex items-center gap-3">
@@ -277,6 +428,25 @@
 					{/each}
 				</div>
 				<div class="blocksRow blocksRowSecondary">
+					<section class="sectionPanel border border-zinc-800">
+						<div class="sectionBand">
+							<h2 class="sectionHeading">{MARKET_DATA.sections.yieldSpreads.title}</h2>
+						</div>
+						<div class="sectionBody">
+							<div class="tickerGrid">
+								{#each computedSpreadTickers as item (item.symbol)}
+									<div class="tickerCard border border-zinc-800">
+										<div class="tickerCardTop">
+											<span class="tickerSym">{item.symbol}</span>
+											<span class={"tickerChg font-mono " + clsFor(item.change)}>{fmtChg(item.change)}</span>
+										</div>
+										<div class="tickerLbl">{item.label}</div>
+										<div class="tickerVal font-mono">{item.value}</div>
+									</div>
+								{/each}
+							</div>
+						</div>
+					</section>
 					{#each secondaryRow as section (section.id)}
 						{@render sectionPanel(section)}
 					{/each}
@@ -319,7 +489,12 @@
 								<path d={pathD} fill="none" stroke="url(#g)" stroke-width="2.2" stroke-linecap="round" />
 
 								{#each curve as p, i (p.tenor)}
-									<circle cx={xAt(i)} cy={yAt(p.yield)} r="2.4" class="curvePt" />
+									<circle
+										cx={xAt(i, curve.length)}
+										cy={yAt(p.yield, minY, rangeY)}
+										r="2.4"
+										class="curvePt"
+									/>
 								{/each}
 							</svg>
 
@@ -386,7 +561,7 @@
 
 <style>
 	:global(html) {
-		background: #18181b;
+		background: #09090b;
 	}
 
 	.dashboardLayout {
