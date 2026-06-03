@@ -1,9 +1,76 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
+
+	type FlashDirection = 'up' | 'down' | null;
+
+	const prevPrices: Record<string, number> = {};
+	let flashStates = $state<Record<string, FlashDirection>>({});
+
+	const flashTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+	const PRICE_TRACKERS: { id: string; read: (d: PageData) => number | undefined }[] = [
+		{ id: 'BTC', read: (d) => d.liveBitcoin?.price },
+		{ id: 'SPX', read: (d) => d.spx?.price },
+		{ id: 'NDX', read: (d) => d.ndx?.price },
+		{ id: 'DJI', read: (d) => d.dji?.price },
+		{ id: 'UKX', read: (d) => d.ftse?.price },
+		{ id: 'NSE', read: (d) => d.nse?.price },
+		{ id: 'CSI', read: (d) => d.csi?.price },
+		{ id: 'GC', read: (d) => d.gold?.price },
+		{ id: 'SI', read: (d) => d.silver?.price },
+		{ id: 'CL', read: (d) => d.crude?.price },
+		{ id: 'DXY', read: (d) => d.dxy?.price },
+		{ id: 'USDJPY', read: (d) => d.usdjpy?.price },
+		{ id: 'USDINR', read: (d) => d.usdinr?.price },
+		{ id: 'EFFR', read: (d) => d.effr?.price },
+		{ id: 'SOFR', read: (d) => d.sofr?.price },
+		{ id: '3M', read: (d) => d.us3m?.price },
+		{ id: 'US2Y', read: (d) => d.us2y?.price },
+		{ id: 'US10Y', read: (d) => d.us10y?.price },
+		{ id: 'US30Y', read: (d) => d.us30y?.price },
+		{ id: '2s10s', read: (d) => d.spread2s10s?.price },
+		{ id: '10s30s', read: (d) => d.spread10s30s?.price },
+		{ id: 'DE10Y', read: (d) => d.de10y?.price },
+		{ id: 'JP10Y', read: (d) => d.jp10y?.price },
+		{ id: 'AU10Y', read: (d) => d.au10y?.price }
+	];
+
+	const setFlash = (id: string, direction: 'up' | 'down') => {
+		const existing = flashTimeouts.get(id);
+		if (existing) {
+			clearTimeout(existing);
+		}
+
+		flashStates = { ...flashStates, [id]: direction };
+
+		flashTimeouts.set(
+			id,
+			setTimeout(() => {
+				flashStates = { ...flashStates, [id]: null };
+				flashTimeouts.delete(id);
+			}, 800)
+		);
+	};
+
+	$effect(() => {
+		for (const { id, read } of PRICE_TRACKERS) {
+			const newPrice = read(data);
+			if (typeof newPrice !== 'number') {
+				continue;
+			}
+
+			const cached = prevPrices[id];
+			if (cached !== undefined && newPrice !== cached) {
+				setFlash(id, newPrice > cached ? 'up' : 'down');
+			}
+
+			prevPrices[id] = newPrice;
+		}
+	});
 
 	// ---------------------------------------------------------------------------
 	// MARKET DATA — single source of truth (V1 mock; swap for API/store later)
@@ -464,6 +531,13 @@
 			clearInterval(refreshInterval);
 		};
 	});
+
+	onDestroy(() => {
+		for (const timeout of flashTimeouts.values()) {
+			clearTimeout(timeout);
+		}
+		flashTimeouts.clear();
+	});
 </script>
 
 <main class="min-h-screen bg-zinc-950 text-zinc-100">
@@ -521,7 +595,13 @@
 						{#each tickerItems as r (r.symbol)}
 							<div class="tick">
 								<div class="tickSym">{r.symbol}</div>
-								<div class="tickVal font-mono">{r.value}</div>
+								<div
+									class="tickVal font-mono price-flash"
+									class:blink-green={flashStates[r.symbol] === 'up'}
+									class:blink-red={flashStates[r.symbol] === 'down'}
+								>
+									{r.value}
+								</div>
 								<div class={"tickChg font-mono " + clsFor(r.change)}>
 									{fmtChg(r.change)}
 								</div>
@@ -532,7 +612,13 @@
 						{#each tickerItems as r (r.symbol + '__dup')}
 							<div class="tick">
 								<div class="tickSym">{r.symbol}</div>
-								<div class="tickVal font-mono">{r.value}</div>
+								<div
+									class="tickVal font-mono price-flash"
+									class:blink-green={flashStates[r.symbol] === 'up'}
+									class:blink-red={flashStates[r.symbol] === 'down'}
+								>
+									{r.value}
+								</div>
 								<div class={"tickChg font-mono " + clsFor(r.change)}>
 									{fmtChg(r.change)}
 								</div>
@@ -566,7 +652,13 @@
 											<span class={"tickerChg font-mono " + clsFor(item.change)}>{fmtChg(item.change)}</span>
 										</div>
 										<div class="tickerLbl">{item.label}</div>
-										<div class="tickerVal font-mono">{item.value}</div>
+										<div
+											class="tickerVal font-mono price-flash"
+											class:blink-green={flashStates[item.symbol] === 'up'}
+											class:blink-red={flashStates[item.symbol] === 'down'}
+										>
+											{item.value}
+										</div>
 									</div>
 								{/each}
 								<div class="tickerCard border border-zinc-800">
@@ -582,7 +674,11 @@
 										</span>
 									</div>
 									<div class="tickerLbl">{BITCOIN.label}</div>
-									<div class="tickerVal font-mono">
+									<div
+										class="tickerVal font-mono price-flash"
+										class:blink-green={flashStates[BITCOIN.symbol] === 'up'}
+										class:blink-red={flashStates[BITCOIN.symbol] === 'down'}
+									>
 										${fmtNum(BITCOIN.currentPrice, 2)}
 									</div>
 								</div>
@@ -693,7 +789,13 @@
 							<span class={"tickerChg font-mono " + clsFor(item.change)}>{fmtChg(item.change)}</span>
 						</div>
 						<div class="tickerLbl">{item.label}</div>
-						<div class="tickerVal font-mono">{item.value}</div>
+						<div
+							class="tickerVal font-mono price-flash"
+							class:blink-green={flashStates[item.symbol] === 'up'}
+							class:blink-red={flashStates[item.symbol] === 'down'}
+						>
+							{item.value}
+						</div>
 					</div>
 				{/each}
 			</div>
@@ -814,6 +916,43 @@
 		color: rgb(250 250 250);
 		margin-top: 4px;
 		letter-spacing: 0.02em;
+	}
+
+	.price-flash {
+		display: inline-block;
+		border-radius: 2px;
+		padding: 0 2px;
+		will-change: background-color, color;
+	}
+
+	@keyframes flashGreen {
+		0% {
+			background-color: rgba(34, 197, 94, 0.4);
+			color: #22c55e;
+		}
+		100% {
+			background-color: transparent;
+			color: rgb(250 250 250);
+		}
+	}
+
+	@keyframes flashRed {
+		0% {
+			background-color: rgba(239, 68, 68, 0.4);
+			color: #ef4444;
+		}
+		100% {
+			background-color: transparent;
+			color: rgb(250 250 250);
+		}
+	}
+
+	:global(.blink-green) {
+		animation: flashGreen 0.8s ease-out;
+	}
+
+	:global(.blink-red) {
+		animation: flashRed 0.8s ease-out;
 	}
 
 	.curveSection {
@@ -1010,6 +1149,11 @@
 	.tickVal {
 		color: rgb(244 244 245);
 		letter-spacing: 0.02em;
+	}
+
+	.tickVal.price-flash {
+		border-radius: 2px;
+		padding: 0 2px;
 	}
 
 	.tickChg {
