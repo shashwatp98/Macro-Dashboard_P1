@@ -13,7 +13,7 @@
 
 	const US_RATE_KEYS: UsRateKey[] = ['EFFR', 'SOFR', '3M', 'US2Y', 'US10Y', 'US30Y'];
 
-	/** US rates & funding — live Yahoo yields + static EFFR/SOFR/US2Y placeholders */
+	/** US rates & funding — Yahoo 10Y/30Y + TradingView EFFR/SOFR/2Y/3M */
 	const US_RATES = $derived({
 		EFFR: {
 			label: 'EFFR',
@@ -23,12 +23,12 @@
 		SOFR: {
 			label: 'SOFR',
 			yield: data?.sofr?.price ?? 3.65,
-			change: data?.sofr?.change ?? 0.02
+			change: data?.sofr?.changePct ?? 0.02
 		},
 		'3M': {
 			label: 'US 3-Month T-Bill',
 			yield: data?.us3m?.price ?? 4.15,
-			change: data?.us3m?.change ?? 0.01
+			change: data?.us3m?.changePct ?? 0.09
 		},
 		US2Y: {
 			label: 'US 2-Year Treasury',
@@ -282,7 +282,8 @@
 
 	const toUsRateTicker = (key: UsRateKey): Ticker => {
 		const r = US_RATES[key];
-		const pctChange = key === 'US2Y' || key === 'US10Y' || key === 'US30Y';
+		const pctChange =
+			key === 'SOFR' || key === '3M' || key === 'US2Y' || key === 'US10Y' || key === 'US30Y';
 		return {
 			symbol: key,
 			label: r.label,

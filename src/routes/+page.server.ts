@@ -2,14 +2,41 @@ import type { PageServerLoad } from './$types';
 
 const FETCH_TIMEOUT_MS = 8000;
 
-const symbols =
+const YAHOO_SYMBOLS =
 	'BTC-USD,^GSPC,^NDX,^DJI,^FTSE,^NSEI,000300.SS,GC=F,SI=F,CL=F,DX-Y.NYB,JPY=X,INR=X,^TNX,^TYX';
 
-const SYMBOL_LIST = symbols.split(',');
+const YAHOO_SYMBOL_LIST = YAHOO_SYMBOLS.split(',');
+
+const TRADINGVIEW_SCAN_URL = 'https://scanner.tradingview.com/global/scan';
+
+const TRADINGVIEW_TICKERS = [
+	'TVC:US03M',
+	'FX_IDC:US02Y',
+	'TVC:US02Y',
+	'ECONOMICS:USEFFR',
+	'CME:SR11!',
+	'TVC:DE10Y',
+	'TVC:JP10Y',
+	'TVC:AU10Y'
+] as const;
+
+const TV_TICKER_TO_KEY: Record<
+	string,
+	'us3m' | 'us2y' | 'effr' | 'de10y' | 'jp10y' | 'au10y'
+> = {
+	'TVC:US03M': 'us3m',
+	'FX_IDC:US02Y': 'us2y',
+	'TVC:US02Y': 'us2y',
+	'ECONOMICS:USEFFR': 'effr',
+	'TVC:DE10Y': 'de10y',
+	'TVC:JP10Y': 'jp10y',
+	'TVC:AU10Y': 'au10y'
+};
 
 type LiveQuote = {
 	price: number;
 	changePct: number;
+	changeAbs?: number;
 };
 
 type LiveAbsLevel = {
@@ -34,12 +61,19 @@ type YahooChartResponse = {
 	};
 };
 
+type TradingViewScanResponse = {
+	data?: Array<{
+		s: string;
+		d: (number | null)[];
+	}>;
+};
+
 type MarketLivePayload = {
 	liveBitcoin: LiveQuote;
 	effr: LiveAbsLevel;
-	sofr: LiveAbsLevel;
+	sofr: LiveQuote;
 	us2y: LiveQuote;
-	us3m: LiveAbsLevel;
+	us3m: LiveQuote;
 	us5y: LiveAbsLevel;
 	spx: LiveQuote;
 	ndx: LiveQuote;
@@ -62,7 +96,25 @@ type MarketLivePayload = {
 	spread10s30s: LiveAbsLevel;
 };
 
-const YAHOO_SYMBOL_TO_KEY: Record<string, keyof Omit<MarketLivePayload, 'liveBitcoin' | 'effr' | 'sofr' | 'us2y' | 'us3m' | 'us5y' | 'us10y' | 'us30y' | 'de10y' | 'jp10y' | 'au10y' | 'spread2s10s' | 'spread10s30s'>> = {
+const YAHOO_SYMBOL_TO_KEY: Record<
+	string,
+	keyof Omit<
+		MarketLivePayload,
+		| 'liveBitcoin'
+		| 'effr'
+		| 'sofr'
+		| 'us2y'
+		| 'us3m'
+		| 'us5y'
+		| 'us10y'
+		| 'us30y'
+		| 'de10y'
+		| 'jp10y'
+		| 'au10y'
+		| 'spread2s10s'
+		| 'spread10s30s'
+	>
+> = {
 	'^GSPC': 'spx',
 	'^NDX': 'ndx',
 	'^DJI': 'dji',
@@ -77,35 +129,13 @@ const YAHOO_SYMBOL_TO_KEY: Record<string, keyof Omit<MarketLivePayload, 'liveBit
 	'INR=X': 'usdinr'
 };
 
-/** Static mocks until FRED / alternate feeds — no Yahoo fetch. */
-const STATIC_MOCKS: Pick<
-	MarketLivePayload,
-	| 'effr'
-	| 'sofr'
-	| 'us2y'
-	| 'us3m'
-	| 'us5y'
-	| 'de10y'
-	| 'jp10y'
-	| 'au10y'
-	| 'spread2s10s'
-	| 'spread10s30s'
-> = {
-	effr: { price: 3.65, change: 0 },
-	sofr: { price: 3.65, change: 0.02 },
-	us2y: { price: 4.38, changePct: -0.46 },
-	us3m: { price: 4.15, change: 0.01 },
-	us5y: { price: 4.38, change: -0.02 },
-	de10y: { price: 2.45, changePct: -0.12 },
-	jp10y: { price: 1.02, changePct: 0.05 },
-	au10y: { price: 4.25, changePct: -0.47 },
-	spread2s10s: { price: 0.05, change: -0.02 },
-	spread10s30s: { price: 0.52, change: 0.01 }
-};
-
 const FALLBACK: MarketLivePayload = {
-	...STATIC_MOCKS,
 	liveBitcoin: { price: 67500.0, changePct: -3.4 },
+	effr: { price: 3.65, change: 0 },
+	sofr: { price: 3.65, changePct: 0.02 },
+	us2y: { price: 4.38, changePct: -0.46, changeAbs: -0.02 },
+	us3m: { price: 4.15, changePct: 0.09 },
+	us5y: { price: 4.38, change: -0.02 },
 	spx: { price: 5300.25, changePct: 0.45 },
 	ndx: { price: 18500.5, changePct: 0.62 },
 	dji: { price: 39120.0, changePct: -0.12 },
@@ -118,20 +148,25 @@ const FALLBACK: MarketLivePayload = {
 	dxy: { price: 104.65, changePct: 0.14 },
 	usdjpy: { price: 156.2, changePct: 0.45 },
 	usdinr: { price: 83.55, changePct: -0.08 },
-	us10y: { price: 4.43, changePct: -0.9 },
-	us30y: { price: 4.95, changePct: -0.61 }
+	us10y: { price: 4.43, changePct: -0.9, changeAbs: -0.04 },
+	us30y: { price: 4.95, changePct: -0.61, changeAbs: -0.03 },
+	de10y: { price: 2.45, changePct: -0.12 },
+	jp10y: { price: 1.02, changePct: 0.05 },
+	au10y: { price: 4.25, changePct: -0.47 },
+	spread2s10s: { price: 0.05, change: -0.02 },
+	spread10s30s: { price: 0.52, change: 0.01 }
 };
 
-const FETCH_HEADERS = {
+const YAHOO_HEADERS = {
 	'User-Agent':
 		'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
 	Accept: 'application/json'
 };
 
-const fetchChart = async (yahooSymbol: string): Promise<YahooChartResult | null> => {
+const fetchYahooChart = async (yahooSymbol: string): Promise<YahooChartResult | null> => {
 	const url = `https://query1.finance.yahoo.com/v7/finance/chart/${encodeURIComponent(yahooSymbol)}?interval=1m&range=1d&nocache=${Date.now()}`;
 	const response = await fetch(url, {
-		headers: FETCH_HEADERS,
+		headers: YAHOO_HEADERS,
 		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
 	});
 
@@ -144,7 +179,6 @@ const fetchChart = async (yahooSymbol: string): Promise<YahooChartResult | null>
 	return json.chart?.result?.[0] ?? null;
 };
 
-/** BTC-USD: daily % vs chartPreviousClose (midnight UTC session boundary). */
 const parseBitcoin = (meta: YahooChartMeta): LiveQuote | null => {
 	const currentPrice = meta.regularMarketPrice;
 	const previousClose = meta.chartPreviousClose;
@@ -159,7 +193,6 @@ const parseBitcoin = (meta: YahooChartMeta): LiveQuote | null => {
 	};
 };
 
-/** Equities, commodities, FX: regularMarketPrice + regularMarketChangePercent (prior-close fallback). */
 const parseLiquidQuote = (meta: YahooChartMeta): LiveQuote | null => {
 	const price = meta.regularMarketPrice;
 
@@ -186,7 +219,6 @@ const parseLiquidQuote = (meta: YahooChartMeta): LiveQuote | null => {
 
 const scaleTnxPrice = (raw: number): number => (raw > 10 ? raw / 10 : raw);
 
-/** ^TNX / ^TYX: yield = raw price ÷ 10 when quoted ×10; relative daily % change. */
 const parseUsTreasuryYield = (meta: YahooChartMeta): LiveQuote | null => {
 	const rawPrice = meta.regularMarketPrice;
 
@@ -206,13 +238,15 @@ const parseUsTreasuryYield = (meta: YahooChartMeta): LiveQuote | null => {
 				? ((price - previousYield) / previousYield) * 100
 				: 0;
 
-	return { price, changePct };
+	const changeAbs = previousYield !== null ? price - previousYield : 0;
+
+	return { price, changePct, changeAbs };
 };
 
-const loadChartResults = async (): Promise<YahooChartResult[]> => {
-	const url = `https://query1.finance.yahoo.com/v7/finance/chart/BTC-USD?symbols=${encodeURIComponent(symbols)}&interval=1m&range=1d&nocache=${Date.now()}`;
+const loadYahooResults = async (): Promise<YahooChartResult[]> => {
+	const url = `https://query1.finance.yahoo.com/v7/finance/chart/BTC-USD?symbols=${encodeURIComponent(YAHOO_SYMBOLS)}&interval=1m&range=1d&nocache=${Date.now()}`;
 	const response = await fetch(url, {
-		headers: FETCH_HEADERS,
+		headers: YAHOO_HEADERS,
 		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
 	});
 
@@ -223,14 +257,14 @@ const loadChartResults = async (): Promise<YahooChartResult[]> => {
 	const json = (await response.json()) as YahooChartResponse;
 	const batchResults = json.chart?.result ?? [];
 
-	if (batchResults.length >= SYMBOL_LIST.length) {
+	if (batchResults.length >= YAHOO_SYMBOL_LIST.length) {
 		return batchResults;
 	}
 
 	const perSymbolResults = await Promise.all(
-		SYMBOL_LIST.map(async (sym) => {
+		YAHOO_SYMBOL_LIST.map(async (sym) => {
 			try {
-				return await fetchChart(sym);
+				return await fetchYahooChart(sym);
 			} catch (error) {
 				console.warn(`Yahoo Finance chart fetch failed for ${sym}:`, error);
 				return null;
@@ -240,64 +274,264 @@ const loadChartResults = async (): Promise<YahooChartResult[]> => {
 	return perSymbolResults.filter((r): r is YahooChartResult => r !== null);
 };
 
-export const load: PageServerLoad = async () => {
-	try {
-		const chartResults = await loadChartResults();
-		const payload: MarketLivePayload = { ...FALLBACK, ...STATIC_MOCKS };
+/** TVC:US03M — 3-Month T-Bill yield close and daily % change. */
+const parseUs03M = (row: (number | null)[]): LiveQuote | null => {
+	const parsedUS03MPrice = row[0];
+	const parsedUS03MChange = row[1];
 
-		for (const entry of chartResults) {
-			const meta = entry.meta;
-			const yahooSymbol = meta?.symbol;
+	if (typeof parsedUS03MPrice !== 'number') {
+		return null;
+	}
 
-			if (!meta || !yahooSymbol) {
-				continue;
+	return {
+		price: parsedUS03MPrice,
+		changePct: typeof parsedUS03MChange === 'number' ? parsedUS03MChange : 0
+	};
+};
+
+/** CME SOFR futures: implied rate = 100 − index; invert contract % change for rate direction. */
+const parseImpliedSofr = (row: (number | null)[]): LiveQuote | null => {
+	const close = row[0];
+	const contractChangePct = row[1];
+
+	if (typeof close !== 'number') {
+		return null;
+	}
+
+	const impliedSofr = 100 - close;
+	const sofrChangePct = typeof contractChangePct === 'number' ? -contractChangePct : 0;
+
+	return { price: impliedSofr, changePct: sofrChangePct };
+};
+
+const parseTradingViewRow = (
+	ticker: string,
+	row: (number | null)[]
+): {
+	effr?: LiveAbsLevel;
+	us2y?: LiveQuote;
+	sovereign?: LiveQuote;
+} | null => {
+	const close = row[0];
+	const changePct = row[1];
+	const changeAbs = row[2];
+
+	if (typeof close !== 'number') {
+		return null;
+	}
+
+	const key = TV_TICKER_TO_KEY[ticker];
+	if (!key) {
+		return null;
+	}
+
+	if (key === 'effr') {
+		return {
+			effr: {
+				price: close,
+				change: typeof changeAbs === 'number' ? changeAbs : 0
 			}
+		};
+	}
 
-			if (yahooSymbol === 'BTC-USD') {
-				const btc = parseBitcoin(meta);
-				if (btc) {
-					payload.liveBitcoin = btc;
-				}
-				continue;
+	if (key === 'us2y') {
+		return {
+			us2y: {
+				price: close,
+				changePct: typeof changePct === 'number' ? changePct : 0,
+				changeAbs: typeof changeAbs === 'number' ? changeAbs : 0
 			}
+		};
+	}
 
-			if (yahooSymbol === '^TNX') {
-				const us10y = parseUsTreasuryYield(meta);
-				if (us10y) {
-					payload.us10y = us10y;
-				}
-				continue;
-			}
+	return {
+		sovereign: {
+			price: close,
+			changePct: typeof changePct === 'number' ? changePct : 0
+		}
+	};
+};
 
-			if (yahooSymbol === '^TYX') {
-				const us30y = parseUsTreasuryYield(meta);
-				if (us30y) {
-					payload.us30y = us30y;
-				}
-				continue;
-			}
+const fetchTradingViewMacro = async (): Promise<Partial<MarketLivePayload>> => {
+	const response = await fetch(TRADINGVIEW_SCAN_URL, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			symbols: {
+				tickers: [...TRADINGVIEW_TICKERS],
+				query: { types: [] }
+			},
+			columns: ['close', 'change', 'change_abs']
+		}),
+		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+	});
 
-			const key = YAHOO_SYMBOL_TO_KEY[yahooSymbol];
-			if (!key) {
-				continue;
-			}
+	if (!response.ok) {
+		throw new Error(`TradingView scanner responded with ${response.status}`);
+	}
 
-			const quote = parseLiquidQuote(meta);
-			if (quote) {
-				payload[key] = quote;
+	const json = (await response.json()) as TradingViewScanResponse;
+	const macro: Partial<MarketLivePayload> = {};
+
+	for (const entry of json.data ?? []) {
+		if (entry.s === 'TVC:US03M') {
+			const us3m = parseUs03M(entry.d);
+			if (us3m) {
+				macro.us3m = us3m;
 			}
+			continue;
 		}
 
-		console.log('SUCCESS! Fresh Yahoo Data:', {
-			btc: payload.liveBitcoin,
-			spx: payload.spx,
-			us10y: payload.us10y,
-			us30y: payload.us30y
-		});
+		if (entry.s === 'CME:SR11!') {
+			const sofr = parseImpliedSofr(entry.d);
+			if (sofr) {
+				macro.sofr = sofr;
+			}
+			continue;
+		}
 
-		return payload;
+		const parsed = parseTradingViewRow(entry.s, entry.d);
+		if (!parsed) {
+			continue;
+		}
+
+		if (parsed.effr) {
+			macro.effr = parsed.effr;
+		}
+		if (parsed.us3m) {
+			macro.us3m = parsed.us3m;
+		}
+		if (parsed.us2y) {
+			macro.us2y = parsed.us2y;
+		}
+		if (parsed.sovereign) {
+			const key = TV_TICKER_TO_KEY[entry.s];
+			if (key === 'de10y' || key === 'jp10y' || key === 'au10y') {
+				macro[key] = parsed.sovereign;
+			}
+		}
+	}
+
+	return macro;
+};
+
+const applyYieldSpreads = (payload: MarketLivePayload) => {
+	const yahoo10YPrice = payload.us10y.price;
+	const yahoo30YPrice = payload.us30y.price;
+	const parsedUS2YPrice = payload.us2y.price;
+
+	const spread2s10s = yahoo10YPrice - parsedUS2YPrice;
+	const spread10s30s = yahoo30YPrice - yahoo10YPrice;
+
+	const us10yAbs = payload.us10y.changeAbs ?? 0;
+	const us30yAbs = payload.us30y.changeAbs ?? 0;
+	const us2yAbs = payload.us2y.changeAbs ?? 0;
+
+	payload.spread2s10s = {
+		price: spread2s10s,
+		change: us10yAbs - us2yAbs
+	};
+
+	payload.spread10s30s = {
+		price: spread10s30s,
+		change: us30yAbs - us10yAbs
+	};
+};
+
+const mergeYahooIntoPayload = (payload: MarketLivePayload, chartResults: YahooChartResult[]) => {
+	for (const entry of chartResults) {
+		const meta = entry.meta;
+		const yahooSymbol = meta?.symbol;
+
+		if (!meta || !yahooSymbol) {
+			continue;
+		}
+
+		if (yahooSymbol === 'BTC-USD') {
+			const btc = parseBitcoin(meta);
+			if (btc) {
+				payload.liveBitcoin = btc;
+			}
+			continue;
+		}
+
+		if (yahooSymbol === '^TNX') {
+			const us10y = parseUsTreasuryYield(meta);
+			if (us10y) {
+				payload.us10y = us10y;
+			}
+			continue;
+		}
+
+		if (yahooSymbol === '^TYX') {
+			const us30y = parseUsTreasuryYield(meta);
+			if (us30y) {
+				payload.us30y = us30y;
+			}
+			continue;
+		}
+
+		const key = YAHOO_SYMBOL_TO_KEY[yahooSymbol];
+		if (!key) {
+			continue;
+		}
+
+		const quote = parseLiquidQuote(meta);
+		if (quote) {
+			payload[key] = quote;
+		}
+	}
+};
+
+export const load: PageServerLoad = async () => {
+	const payload: MarketLivePayload = { ...FALLBACK };
+
+	try {
+		const chartResults = await loadYahooResults();
+		mergeYahooIntoPayload(payload, chartResults);
 	} catch (error) {
 		console.error('Yahoo Fetch Failed:', error);
-		return FALLBACK;
 	}
+
+	try {
+		const tvMacro = await fetchTradingViewMacro();
+		if (tvMacro.effr) {
+			payload.effr = tvMacro.effr;
+		}
+		if (tvMacro.sofr) {
+			payload.sofr = tvMacro.sofr;
+		}
+		if (tvMacro.us3m) {
+			payload.us3m = tvMacro.us3m;
+		}
+		if (tvMacro.us2y) {
+			payload.us2y = tvMacro.us2y;
+		}
+		if (tvMacro.de10y) {
+			payload.de10y = tvMacro.de10y;
+		}
+		if (tvMacro.jp10y) {
+			payload.jp10y = tvMacro.jp10y;
+		}
+		if (tvMacro.au10y) {
+			payload.au10y = tvMacro.au10y;
+		}
+	} catch (error) {
+		console.error('TradingView Fetch Failed:', error);
+	}
+
+	applyYieldSpreads(payload);
+
+	console.log('SUCCESS! Macro Data:', {
+		btc: payload.liveBitcoin,
+		effr: payload.effr,
+		sofr: payload.sofr,
+		us3m: payload.us3m,
+		us2y: payload.us2y,
+		us10y: payload.us10y,
+		spread2s10s: payload.spread2s10s,
+		de10y: payload.de10y
+	});
+
+	return payload;
 };
