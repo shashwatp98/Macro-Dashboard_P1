@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onMount } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
 	import type { PageData } from './$types';
 
@@ -400,8 +400,8 @@
 		return `${hh}:${mm}:${ss}`;
 	};
 
-	const clockFmt = (timeZone: string) =>
-		new Intl.DateTimeFormat('en-GB', {
+	const formatZoneClock = (timeZone: string) =>
+		new Date().toLocaleTimeString('en-GB', {
 			timeZone,
 			hour: '2-digit',
 			minute: '2-digit',
@@ -409,13 +409,22 @@
 			hour12: false
 		});
 
-	const fmtNY = clockFmt('America/New_York');
-	const fmtLDN = clockFmt('Europe/London');
-	const fmtTKY = clockFmt('Asia/Tokyo');
-	const fmtDEL = clockFmt('Asia/Kolkata');
+	let nyTime = $state('');
+	let lonTime = $state('');
+	let delTime = $state('');
+	let tokTime = $state('');
+	let now = $state('');
+	let ustOpen = $state(false);
 
-	const nyParts = (d: Date) =>
-		new Intl.DateTimeFormat('en-US', {
+	const updateClocks = () => {
+		const d = new Date();
+		now = headerTime();
+		nyTime = formatZoneClock('America/New_York');
+		lonTime = formatZoneClock('Europe/London');
+		delTime = formatZoneClock('Asia/Kolkata');
+		tokTime = formatZoneClock('Asia/Tokyo');
+
+		const parts = new Intl.DateTimeFormat('en-US', {
 			timeZone: 'America/New_York',
 			weekday: 'short',
 			hour: '2-digit',
@@ -424,29 +433,6 @@
 			hour12: false
 		}).formatToParts(d);
 
-	const tickerItems = $derived([
-		...primaryRow.flatMap((s) => s.items),
-		...spreadsAndCryptoItems,
-		...secondaryRow.flatMap((s) => s.items)
-	]);
-
-	let now = headerTime();
-	let ny = 'NY: --:--:--';
-	let ldn = 'LDN: --:--:--';
-	let tky = 'TKY: --:--:--';
-	let del = 'DEL: --:--:--';
-	let ustOpen = false;
-
-	const tick = () => {
-		const d = new Date();
-		now = headerTime();
-
-		ny = `NY: ${fmtNY.format(d)}`;
-		ldn = `LDN: ${fmtLDN.format(d)}`;
-		tky = `TKY: ${fmtTKY.format(d)}`;
-		del = `DEL: ${fmtDEL.format(d)}`;
-
-		const parts = nyParts(d);
 		const weekday = parts.find((p) => p.type === 'weekday')?.value ?? '';
 		const hourStr = parts.find((p) => p.type === 'hour')?.value ?? '00';
 		const minuteStr = parts.find((p) => p.type === 'minute')?.value ?? '00';
@@ -459,16 +445,22 @@
 		ustOpen = isWeekday && afterOpen && beforeClose;
 	};
 
-	tick();
-	const clockInterval = setInterval(tick, 1000);
-	onDestroy(() => clearInterval(clockInterval));
+	const tickerItems = $derived([
+		...primaryRow.flatMap((s) => s.items),
+		...spreadsAndCryptoItems,
+		...secondaryRow.flatMap((s) => s.items)
+	]);
 
 	onMount(() => {
+		updateClocks();
+
+		const clockInterval = setInterval(updateClocks, 1000);
 		const refreshInterval = setInterval(() => {
 			invalidateAll();
 		}, 15000);
 
 		return () => {
+			clearInterval(clockInterval);
 			clearInterval(refreshInterval);
 		};
 	});
@@ -480,13 +472,13 @@
 		<div class="mx-auto max-w-[1600px] px-3 py-1">
 			<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-mono text-zinc-300">
 				<div class="flex items-center gap-3">
-					<span class="text-zinc-200">{ny}</span>
+					<span class="text-zinc-200">NY: {nyTime}</span>
 					<span class="text-zinc-500">|</span>
-					<span>{ldn}</span>
+					<span>LDN: {lonTime}</span>
 					<span class="text-zinc-500">|</span>
-					<span>{tky}</span>
+					<span>TKY: {tokTime}</span>
 					<span class="text-zinc-500">|</span>
-					<span>{del}</span>
+					<span>DEL: {delTime}</span>
 				</div>
 
 				<div class="ml-auto flex items-center gap-2">
