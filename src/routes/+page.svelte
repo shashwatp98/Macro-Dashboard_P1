@@ -2,17 +2,21 @@
 	import { onDestroy } from 'svelte';
 
 	type Change = {
-		mode: 'pct' | 'bp';
+		mode: 'pct' | 'abs' | 'bp';
 		value: number;
 	};
 
-	type WidgetRow = {
+	type Ticker = {
 		symbol: string;
 		label: string;
 		value: string;
 		change: Change;
-		note?: string;
-		forceNegative?: boolean;
+	};
+
+	type MarketSection = {
+		id: string;
+		title: string;
+		items: Ticker[];
 	};
 
 	type CurvePoint = {
@@ -22,58 +26,75 @@
 
 	const fmtSigned = (n: number, digits = 2) => `${n >= 0 ? '+' : ''}${n.toFixed(digits)}`;
 	const fmtSignedBp = (n: number, digits = 3) => `${n >= 0 ? '+' : ''}${n.toFixed(digits)}`;
-	const clsFor = (c: Change, forceNegative = false) => {
-		const v = forceNegative ? -Math.abs(c.value) : c.value;
-		if (v > 0) return 'text-emerald-300';
-		if (v < 0) return 'text-rose-300';
+
+	const fmtChg = (c: Change) => {
+		if (c.mode === 'pct') return `${fmtSigned(c.value, 2)}%`;
+		if (c.mode === 'bp') return fmtSignedBp(c.value, 3);
+		return fmtSigned(c.value, 2);
+	};
+
+	const clsFor = (c: Change) => {
+		if (c.value > 0) return 'text-emerald-300';
+		if (c.value < 0) return 'text-rose-300';
 		return 'text-zinc-300';
 	};
 
-	const rates: WidgetRow[] = [
-		{ symbol: 'US2Y', label: 'US 2Y', value: '4.82%', change: { mode: 'bp', value: 0.012 } },
-		{ symbol: 'US10Y', label: 'US 10Y', value: '4.45%', change: { mode: 'bp', value: -0.034 } },
-		{ symbol: 'US30Y', label: 'US 30Y', value: '4.58%', change: { mode: 'bp', value: -0.021 } }
+	const usRatesFunding: Ticker[] = [
+		{ symbol: 'EFFR', label: 'EFFR', value: '3.65%', change: { mode: 'abs', value: 0 } },
+		{ symbol: 'SOFR', label: 'SOFR', value: '3.65%', change: { mode: 'abs', value: 0.02 } },
+		{ symbol: '3M', label: 'US 3-Month T-Bill', value: '4.15%', change: { mode: 'abs', value: 0.01 } },
+		{ symbol: 'US2Y', label: 'US 2-Year Treasury', value: '4.38%', change: { mode: 'abs', value: -0.02 } },
+		{ symbol: 'US10Y', label: 'US 10-Year Treasury', value: '4.43%', change: { mode: 'abs', value: -0.04 } },
+		{ symbol: 'US30Y', label: 'US 30-Year Treasury', value: '4.95%', change: { mode: 'abs', value: -0.03 } }
 	];
 
-	const spreads: WidgetRow[] = [
-		{
-			symbol: '2s10s',
-			label: '2s10s Spread',
-			value: '-0.37%',
-			change: { mode: 'pct', value: -0.37 },
-			note: 'inverted',
-			forceNegative: true
-		},
-		{ symbol: '5s30s', label: '5s30s Spread', value: '+0.13%', change: { mode: 'pct', value: 0.13 } }
+	const yieldSpreads: Ticker[] = [
+		{ symbol: '2s10s', label: '2s10s Spread', value: '0.05%', change: { mode: 'abs', value: -0.02 } },
+		{ symbol: '10s30s', label: '10s30s Spread', value: '0.52%', change: { mode: 'abs', value: 0.01 } }
 	];
 
-	const equities: WidgetRow[] = [
-		{ symbol: 'SPX', label: 'S&P 500', value: '5,300', change: { mode: 'pct', value: 0.45 } },
-		{ symbol: 'NDX', label: 'Nasdaq 100', value: '18,500', change: { mode: 'pct', value: 0.62 } },
-		{ symbol: 'RUT', label: 'Russell 2000', value: '2,020', change: { mode: 'pct', value: -0.15 } }
+	const globalSovereign: Ticker[] = [
+		{ symbol: 'DE10Y', label: 'Bunds 10Y (Germany)', value: '2.45%', change: { mode: 'abs', value: -0.01 } },
+		{ symbol: 'JP10Y', label: 'JGB 10Y (Japan)', value: '1.02%', change: { mode: 'abs', value: 0.03 } },
+		{ symbol: 'AU10Y', label: 'Australia 10Y', value: '4.25%', change: { mode: 'abs', value: -0.02 } }
 	];
 
-	const commodities: WidgetRow[] = [
-		{ symbol: 'XAU', label: 'Gold', value: '$2,345.60', change: { mode: 'pct', value: 0.61 } },
-		{ symbol: 'WTI', label: 'WTI Crude', value: '$78.45', change: { mode: 'pct', value: -1.41 } },
-		{ symbol: 'BRN', label: 'Brent Crude', value: '$82.90', change: { mode: 'pct', value: -1.13 } },
-		{ symbol: 'HG', label: 'Copper', value: '$4.62', change: { mode: 'pct', value: 1.09 } }
+	const globalEquities: Ticker[] = [
+		{ symbol: 'SPX', label: 'S&P 500', value: '5,300.25', change: { mode: 'pct', value: 0.45 } },
+		{ symbol: 'NDX', label: 'NASDAQ 100', value: '18,500.50', change: { mode: 'pct', value: 0.62 } },
+		{ symbol: 'DJI', label: 'Dow Jones', value: '39,120.00', change: { mode: 'pct', value: -0.12 } },
+		{ symbol: 'UKX', label: 'FTSE 100', value: '8,230.10', change: { mode: 'pct', value: 0.18 } },
+		{ symbol: 'NSE', label: 'Nifty 50', value: '23,200.40', change: { mode: 'pct', value: -0.7 } },
+		{ symbol: 'SSEC', label: 'Shanghai Composite', value: '4,104.33', change: { mode: 'pct', value: 0.55 } }
 	];
 
-	const important: WidgetRow[] = [
-		{ symbol: 'DXY', label: 'DXY', value: '104.65', change: { mode: 'pct', value: 0.14 } },
-		{ symbol: 'VIX', label: 'VIX', value: '13.25', change: { mode: 'pct', value: -2.3 } }
+	const commoditiesFx: Ticker[] = [
+		{ symbol: 'GC', label: 'Gold', value: '$2,345.60', change: { mode: 'pct', value: 0.61 } },
+		{ symbol: 'SI', label: 'Silver', value: '$29.45', change: { mode: 'pct', value: 1.2 } },
+		{ symbol: 'CL', label: 'WTI Crude', value: '$78.45', change: { mode: 'pct', value: -1.41 } },
+		{ symbol: 'DXY', label: 'US Dollar Index', value: '104.65', change: { mode: 'pct', value: 0.14 } },
+		{ symbol: 'USDJPY', label: 'USD/JPY', value: '156.20', change: { mode: 'pct', value: 0.45 } },
+		{ symbol: 'USDINR', label: 'USD/INR', value: '83.55', change: { mode: 'pct', value: -0.08 } }
 	];
+
+	const primaryRow: MarketSection[] = [
+		{ id: 'us-rates', title: 'US RATES & FUNDING', items: usRatesFunding },
+		{ id: 'equities', title: 'GLOBAL EQUITIES', items: globalEquities },
+		{ id: 'commodities-fx', title: 'COMMODITIES & GLOBAL FX', items: commoditiesFx }
+	];
+
+	const secondaryRow: MarketSection[] = [
+		{ id: 'spreads', title: 'YIELD SPREADS', items: yieldSpreads },
+		{ id: 'sovereign', title: 'GLOBAL SOVEREIGN 10Y', items: globalSovereign }
+	];
+
+	const sections = [...primaryRow, ...secondaryRow];
 
 	const curve: CurvePoint[] = [
-		{ tenor: '1M', yield: 5.3 },
-		{ tenor: '3M', yield: 5.25 },
-		{ tenor: '6M', yield: 5.15 },
-		{ tenor: '1Y', yield: 4.95 },
-		{ tenor: '2Y', yield: 4.82 },
-		{ tenor: '5Y', yield: 4.6 },
-		{ tenor: '10Y', yield: 4.45 },
-		{ tenor: '30Y', yield: 4.58 }
+		{ tenor: '3M', yield: 4.15 },
+		{ tenor: '2Y', yield: 4.38 },
+		{ tenor: '10Y', yield: 4.43 },
+		{ tenor: '30Y', yield: 4.95 }
 	];
 
 	const w = 720;
@@ -133,7 +154,7 @@
 			hour12: false
 		}).formatToParts(d);
 
-	const tickerItems = [...rates, ...equities, ...commodities, ...important];
+	const tickerItems = sections.flatMap((s) => s.items);
 
 	let now = headerTime();
 	let ny = 'NY: --:--:--';
@@ -204,10 +225,8 @@
 	<div class="sticky top-0 z-30 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
 		<div class="mx-auto max-w-[1600px] px-3 py-2">
 			<div class="flex items-center gap-3">
-				<div class="flex items-baseline gap-2">
-					<div class="text-[11px] uppercase tracking-[0.22em] text-zinc-400">
-						Global Macro Dashboard
-					</div>
+				<div class="text-[11px] uppercase tracking-[0.22em] text-zinc-400">
+					Global Macro Dashboard
 				</div>
 				<div class="ml-auto flex items-center gap-3 text-[11px] text-zinc-400">
 					<div class="hidden sm:block">LOCAL</div>
@@ -215,7 +234,7 @@
 					<div class="h-3 w-px bg-zinc-800" />
 					<div class="font-mono">
 						2s10s&nbsp;
-						<span class={clsFor({ mode: 'bp', value: invLevel }, true)}>{invLevel.toFixed(1)}bp</span>
+						<span class={clsFor({ mode: 'abs', value: invLevel })}>{invLevel.toFixed(1)}bp</span>
 					</div>
 				</div>
 			</div>
@@ -227,10 +246,8 @@
 							<div class="tick">
 								<div class="tickSym">{r.symbol}</div>
 								<div class="tickVal font-mono">{r.value}</div>
-								<div class={"tickChg font-mono " + clsFor(r.change, r.forceNegative ?? false)}>
-									{r.change.mode === 'pct'
-										? `${fmtSigned(r.change.value, 2)}%`
-										: `${fmtSignedBp(r.change.value, 3)}`}
+								<div class={"tickChg font-mono " + clsFor(r.change)}>
+									{fmtChg(r.change)}
 								</div>
 							</div>
 						{/each}
@@ -240,10 +257,8 @@
 							<div class="tick">
 								<div class="tickSym">{r.symbol}</div>
 								<div class="tickVal font-mono">{r.value}</div>
-								<div class={"tickChg font-mono " + clsFor(r.change, r.forceNegative ?? false)}>
-									{r.change.mode === 'pct'
-										? `${fmtSigned(r.change.value, 2)}%`
-										: `${fmtSignedBp(r.change.value, 3)}`}
+								<div class={"tickChg font-mono " + clsFor(r.change)}>
+									{fmtChg(r.change)}
 								</div>
 							</div>
 						{/each}
@@ -254,174 +269,29 @@
 	</div>
 
 	<div class="mx-auto max-w-[1600px] px-3 pb-6 pt-3">
-		<!-- Main 3-column market grid -->
-		<div class="grid grid-cols-1 gap-2 lg:grid-cols-3">
-			<section class="space-y-2">
-				<div class="widget">
-					<div class="widgetHeader">
-						<div class="widgetTitle">Rates</div>
-						<div class="widgetMeta">UST yields</div>
-					</div>
-					<div class="widgetBody">
-						{#each rates as r (r.symbol)}
-							<div class="row">
-								<div class="rowL">
-									<div class="sym">{r.symbol}</div>
-									<div class="lbl">{r.label}</div>
-								</div>
-								<div class="rowR">
-									<div class="val font-mono">{r.value}</div>
-									<div class={"chg font-mono " + clsFor(r.change)}>
-										{fmtSignedBp(r.change.value, 3)}
-									</div>
-								</div>
-							</div>
-						{/each}
-					</div>
+		<div class="dashboardLayout">
+			<div class="blocksStack">
+				<div class="blocksRow blocksRowPrimary">
+					{#each primaryRow as section (section.id)}
+						{@render sectionPanel(section)}
+					{/each}
 				</div>
-
-				<div class="widget">
-					<div class="widgetHeader">
-						<div class="widgetTitle">Spreads</div>
-						<div class="widgetMeta">curve / inversion</div>
-					</div>
-					<div class="widgetBody">
-						{#each spreads as s (s.symbol)}
-							<div class="row">
-								<div class="rowL">
-									<div class="sym">{s.symbol}</div>
-									<div class="lbl">{s.label}</div>
-								</div>
-								<div class="rowR">
-									<div class="val font-mono">{s.value}</div>
-									<div class={"chg font-mono " + clsFor(s.change, s.forceNegative ?? false)}>
-										{s.change.mode === 'pct' ? `${fmtSigned(s.change.value, 2)}%` : fmtSignedBp(s.change.value, 3)}
-									</div>
-								</div>
-							</div>
-							{#if s.note}
-								<div class="noteRow">
-									<span class="noteTag">FLAG</span>
-									<span class="noteText">{s.note.toUpperCase()}</span>
-								</div>
-							{/if}
-						{/each}
-					</div>
+				<div class="blocksRow blocksRowSecondary">
+					{#each secondaryRow as section (section.id)}
+						{@render sectionPanel(section)}
+					{/each}
 				</div>
-			</section>
+			</div>
 
-			<section class="space-y-2">
-				<div class="widget">
-					<div class="widgetHeader">
-						<div class="widgetTitle">Equities</div>
-						<div class="widgetMeta">major indices</div>
-					</div>
-					<div class="widgetBody">
-						{#each equities as e (e.symbol)}
-							<div class="row">
-								<div class="rowL">
-									<div class="sym">{e.symbol}</div>
-									<div class="lbl">{e.label}</div>
-								</div>
-								<div class="rowR">
-									<div class="val font-mono">{e.value}</div>
-									<div class={"chg font-mono " + clsFor(e.change)}>
-										{fmtSigned(e.change.value, 2)}%
-									</div>
-								</div>
-							</div>
-						{/each}
-					</div>
-				</div>
-
-				<div class="widget">
-					<div class="widgetHeader">
-						<div class="widgetTitle">Commodities</div>
-						<div class="widgetMeta">spot / front month</div>
-					</div>
-					<div class="widgetBody">
-						{#each commodities as c (c.symbol)}
-							<div class="row">
-								<div class="rowL">
-									<div class="sym">{c.symbol}</div>
-									<div class="lbl">{c.label}</div>
-								</div>
-								<div class="rowR">
-									<div class="val font-mono">{c.value}</div>
-									<div class={"chg font-mono " + clsFor(c.change)}>
-										{fmtSigned(c.change.value, 2)}%
-									</div>
-								</div>
-							</div>
-						{/each}
-					</div>
-				</div>
-			</section>
-
-			<section class="space-y-2">
-				<div class="widget">
-					<div class="widgetHeader">
-						<div class="widgetTitle">Important Tickers</div>
-						<div class="widgetMeta">risk / dollar</div>
-					</div>
-					<div class="widgetBody">
-						{#each important as t (t.symbol)}
-							<div class="row">
-								<div class="rowL">
-									<div class="sym">{t.symbol}</div>
-									<div class="lbl">{t.label}</div>
-								</div>
-								<div class="rowR">
-									<div class="val font-mono">{t.value}</div>
-									<div class={"chg font-mono " + clsFor(t.change)}>
-										{fmtSigned(t.change.value, 2)}%
-									</div>
-								</div>
-							</div>
-						{/each}
-					</div>
-				</div>
-
-				<div class="widget">
-					<div class="widgetHeader">
-						<div class="widgetTitle">System</div>
-						<div class="widgetMeta">snapshot</div>
-					</div>
-					<div class="widgetBody">
-						<div class="grid grid-cols-2 gap-2">
-							<div class="miniKpi">
-								<div class="k">REGIME</div>
-								<div class="v font-mono">TIGHT</div>
-							</div>
-							<div class="miniKpi">
-								<div class="k">LIQUIDITY</div>
-								<div class="v font-mono">NEUTRAL</div>
-							</div>
-							<div class="miniKpi">
-								<div class="k">VOL</div>
-								<div class="v font-mono">LOW</div>
-							</div>
-							<div class="miniKpi">
-								<div class="k">RISK</div>
-								<div class="v font-mono">MIXED</div>
-							</div>
-						</div>
-						<div class="mt-2 border-t border-zinc-800 pt-2 text-[11px] text-zinc-500">
-							Mock terminal layout. Numbers are static for this version.
-						</div>
-					</div>
-				</div>
-			</section>
-
-			<!-- Dedicated yield curve section -->
-			<section class="lg:col-span-3">
-				<div class="widget">
+			<!-- Yield Curve Monitor -->
+			<section class="curveSection">
+				<div class="widget border border-zinc-800">
 					<div class="widgetHeader">
 						<div class="widgetTitle">Yield Curve Monitor</div>
-						<div class="widgetMeta">UST curve (inversion visible)</div>
+						<div class="widgetMeta">UST curve — 3M / 2Y / 10Y / 30Y</div>
 					</div>
 					<div class="widgetBody">
-						<div class="curveWrap">
+						<div class="curveWrap border border-zinc-800">
 							<svg
 								viewBox={`0 0 ${w} ${h}`}
 								class="curveSvg"
@@ -431,12 +301,11 @@
 								<defs>
 									<linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
 										<stop offset="0%" stop-color="rgb(16 185 129)" stop-opacity="0.45" />
-										<stop offset="70%" stop-color="rgb(244 63 94)" stop-opacity="0.55" />
-										<stop offset="100%" stop-color="rgb(244 63 94)" stop-opacity="0.65" />
+										<stop offset="55%" stop-color="rgb(52 211 153)" stop-opacity="0.5" />
+										<stop offset="100%" stop-color="rgb(244 63 94)" stop-opacity="0.55" />
 									</linearGradient>
 								</defs>
 
-								<!-- grid -->
 								{#each Array.from({ length: 6 }) as _, i (i)}
 									<line
 										x1={padX}
@@ -447,10 +316,8 @@
 									/>
 								{/each}
 
-								<!-- curve -->
 								<path d={pathD} fill="none" stroke="url(#g)" stroke-width="2.2" stroke-linecap="round" />
 
-								<!-- points -->
 								{#each curve as p, i (p.tenor)}
 									<circle cx={xAt(i)} cy={yAt(p.yield)} r="2.4" class="curvePt" />
 								{/each}
@@ -463,33 +330,27 @@
 							</div>
 						</div>
 
-						<div class="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
-							<div class="miniKpi">
-								<div class="k">1M</div>
-								<div class="v font-mono">{curve[0].yield.toFixed(2)}%</div>
-							</div>
-							<div class="miniKpi">
-								<div class="k">2Y</div>
-								<div class="v font-mono">{(curve.find((p) => p.tenor === '2Y')?.yield ?? 0).toFixed(2)}%</div>
-							</div>
-							<div class="miniKpi">
-								<div class="k">10Y</div>
-								<div class="v font-mono">{(curve.find((p) => p.tenor === '10Y')?.yield ?? 0).toFixed(2)}%</div>
-							</div>
+						<div class="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+							{#each curve as p (p.tenor + '-kpi')}
+								<div class="miniKpi border border-zinc-800">
+									<div class="k">{p.tenor}</div>
+									<div class="v font-mono">{p.yield.toFixed(2)}%</div>
+								</div>
+							{/each}
 						</div>
 
 						<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
-							<div class="badge">
-								<span class="bKey">INVERSION</span>
-								<span class={"bVal " + clsFor({ mode: 'bp', value: invLevel }, true)}>
+							<div class="badge border border-zinc-800">
+								<span class="bKey">2s10s</span>
+								<span class={"bVal font-mono " + clsFor({ mode: 'abs', value: invLevel })}>
 									{invLevel.toFixed(1)}bp
 								</span>
 							</div>
-							<div class="badge">
+							<div class="badge border border-zinc-800">
 								<span class="bKey">RANGE</span>
 								<span class="bVal font-mono">{minY.toFixed(2)}–{maxY.toFixed(2)}%</span>
 							</div>
-							<div class="badge">
+							<div class="badge border border-zinc-800">
 								<span class="bKey">MODE</span>
 								<span class="bVal font-mono">STATIC</span>
 							</div>
@@ -501,13 +362,154 @@
 	</div>
 </main>
 
+{#snippet sectionPanel(section: MarketSection)}
+	<section class="sectionPanel border border-zinc-800">
+		<div class="sectionBand">
+			<h2 class="sectionHeading">{section.title}</h2>
+		</div>
+		<div class="sectionBody">
+			<div class="tickerGrid">
+				{#each section.items as item (item.symbol)}
+					<div class="tickerCard border border-zinc-800">
+						<div class="tickerCardTop">
+							<span class="tickerSym">{item.symbol}</span>
+							<span class={"tickerChg font-mono " + clsFor(item.change)}>{fmtChg(item.change)}</span>
+						</div>
+						<div class="tickerLbl">{item.label}</div>
+						<div class="tickerVal font-mono">{item.value}</div>
+					</div>
+				{/each}
+			</div>
+		</div>
+	</section>
+{/snippet}
+
 <style>
 	:global(html) {
 		background: #18181b;
 	}
 
+	.dashboardLayout {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.blocksStack {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.blocksRow {
+		display: grid;
+		gap: 8px;
+		align-items: stretch;
+		grid-template-columns: 1fr;
+	}
+
+	.blocksRowPrimary {
+		grid-template-columns: 1fr;
+	}
+
+	@media (min-width: 768px) {
+		.blocksRowPrimary {
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
+	}
+
+	.blocksRowSecondary {
+		grid-template-columns: 1fr;
+	}
+
+	@media (min-width: 768px) {
+		.blocksRowSecondary {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+
+	.sectionPanel {
+		background: rgba(24, 24, 27, 0.78);
+		display: flex;
+		flex-direction: column;
+		min-height: 0;
+	}
+
+	.sectionBand {
+		padding: 10px 10px 8px 10px;
+		border-bottom: 1px solid rgb(39 39 42);
+		background: rgba(0, 0, 0, 0.55);
+	}
+
+	.sectionHeading {
+		margin: 0;
+		font-size: 10px;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.18em;
+		color: rgb(228 228 231);
+		line-height: 1.3;
+	}
+
+	.sectionBody {
+		padding: 6px 8px 8px 8px;
+		flex: 1;
+	}
+
+	.tickerGrid {
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+
+	.tickerCard {
+		background: rgba(24, 24, 27, 0.65);
+		padding: 6px 8px;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+		justify-content: space-between;
+	}
+
+	.tickerCardTop {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 8px;
+	}
+
+	.tickerSym {
+		font-size: 10px;
+		letter-spacing: 0.1em;
+		color: rgb(113 113 122);
+		text-transform: uppercase;
+	}
+
+	.tickerLbl {
+		font-size: 10px;
+		color: rgb(161 161 170);
+		margin-top: 2px;
+		line-height: 1.25;
+	}
+
+	.tickerVal {
+		font-size: 12px;
+		color: rgb(250 250 250);
+		margin-top: 4px;
+		letter-spacing: 0.02em;
+	}
+
+	.curveSection {
+		width: 100%;
+	}
+
+	.tickerChg {
+		font-size: 11px;
+		letter-spacing: 0.02em;
+		white-space: nowrap;
+	}
+
 	.widget {
-		border: 1px solid rgb(39 39 42);
 		background: rgba(24, 24, 27, 0.78);
 	}
 
@@ -536,86 +538,7 @@
 		padding: 8px 10px 10px 10px;
 	}
 
-	.row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 10px;
-		padding: 7px 0;
-		border-bottom: 1px solid rgba(39, 39, 42, 0.7);
-	}
-
-	.row:last-child {
-		border-bottom: none;
-	}
-
-	.rowL {
-		display: flex;
-		align-items: baseline;
-		gap: 10px;
-		min-width: 0;
-	}
-
-	.sym {
-		font-size: 11px;
-		color: rgb(113 113 122);
-		min-width: 44px;
-	}
-
-	.lbl {
-		font-size: 12px;
-		color: rgb(228 228 231);
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.rowR {
-		display: flex;
-		align-items: baseline;
-		gap: 12px;
-	}
-
-	.val {
-		font-size: 12px;
-		color: rgb(244 244 245);
-		min-width: 92px;
-		text-align: right;
-		letter-spacing: 0.02em;
-	}
-
-	.chg {
-		font-size: 12px;
-		min-width: 78px;
-		text-align: right;
-		letter-spacing: 0.02em;
-	}
-
-	.noteRow {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 8px 0 4px 0;
-	}
-
-	.noteTag {
-		font-size: 10px;
-		letter-spacing: 0.22em;
-		text-transform: uppercase;
-		color: rgb(161 161 170);
-		border: 1px solid rgb(39 39 42);
-		padding: 2px 6px;
-		background: rgba(24, 24, 27, 0.6);
-	}
-
-	.noteText {
-		font-size: 11px;
-		color: rgb(244 63 94);
-		letter-spacing: 0.12em;
-	}
-
 	.miniKpi {
-		border: 1px solid rgb(39 39 42);
 		background: rgba(9, 9, 11, 0.22);
 		padding: 8px 10px;
 	}
@@ -635,7 +558,6 @@
 	}
 
 	.curveWrap {
-		border: 1px solid rgba(39, 39, 42, 0.85);
 		background: rgba(9, 9, 11, 0.2);
 		padding: 10px 10px 8px 10px;
 	}
@@ -659,7 +581,7 @@
 
 	.tenors {
 		display: grid;
-		grid-template-columns: repeat(8, minmax(0, 1fr));
+		grid-template-columns: repeat(4, minmax(0, 1fr));
 		gap: 6px;
 		margin-top: 8px;
 	}
@@ -677,7 +599,6 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 8px;
-		border: 1px solid rgb(39 39 42);
 		background: rgba(24, 24, 27, 0.5);
 		padding: 4px 8px;
 	}
@@ -694,7 +615,6 @@
 		color: rgb(212 212 216);
 	}
 
-	/* Ticker (marquee-style) */
 	.ticker {
 		border: 1px solid rgb(39 39 42);
 		background: rgba(9, 9, 11, 0.25);
@@ -734,7 +654,7 @@
 		gap: 8px;
 		font-size: 11px;
 		will-change: transform;
-		animation: tickerScroll 34s linear infinite;
+		animation: tickerScroll 42s linear infinite;
 	}
 
 	.ticker:hover .tickerTrack {
