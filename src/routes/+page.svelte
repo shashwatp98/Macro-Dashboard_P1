@@ -65,7 +65,7 @@
 		{ symbol: 'DJI', label: 'Dow Jones', value: '39,120.00', change: { mode: 'pct', value: -0.12 } },
 		{ symbol: 'UKX', label: 'FTSE 100', value: '8,230.10', change: { mode: 'pct', value: 0.18 } },
 		{ symbol: 'NSE', label: 'Nifty 50', value: '23,200.40', change: { mode: 'pct', value: -0.7 } },
-		{ symbol: 'SSEC', label: 'Shanghai Composite', value: '4,104.33', change: { mode: 'pct', value: 0.55 } }
+		{ symbol: 'CSI', label: 'CSI 300', value: '4,104.33', change: { mode: 'pct', value: 0.55 } }
 	];
 
 	const commoditiesFx: Ticker[] = [

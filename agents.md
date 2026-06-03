@@ -19,6 +19,69 @@ The application is designed for a single user and is not intended to be a multi-
 
 ---
 
+## Project — V1 Scope
+
+V1 is a **single-page, mock-data dashboard** in `src/routes/+page.svelte`: dense Bloomberg-style layout, category blocks, scrolling summary ticker, and static values for development and layout iteration.
+
+### V1 — Implemented UI
+
+The following are **fully implemented in V1** (no external data feeds yet):
+
+* **Live clock & market status banner** (top of page): NY, London, Tokyo, and New Delhi clocks (1s refresh); US Treasury **OPEN/CLOSED** indicator (NY time, Mon–Fri 08:00–17:00).
+* **Yield Curve Monitor** (bottom of page): inline **SVG** line chart for UST tenors **3M, 2Y, 10Y, 30Y**, aligned with US Rates mock yields; tenor labels and spread KPIs.
+
+### V1 — Asset Universe (Baseline)
+
+This is the canonical **V1 asset universe**. All tickers below should appear in the dashboard mock data and scrolling ticker unless noted otherwise.
+
+**1. US Rates & Funding**
+
+* EFFR
+* SOFR
+* US 3-Month T-Bill (3M)
+* US 2-Year Treasury (2Y)
+* US 10-Year Treasury (10Y)
+* US 30-Year Treasury (30Y)
+
+**2. Yield Spreads**
+
+* 2s10s
+* 10s30s
+
+**3. Global Sovereign 10Y**
+
+* Bunds 10Y (Germany)
+* JGB 10Y (Japan)
+* Australia 10Y
+
+**4. Global Equities**
+
+* S&P 500 (SPX)
+* NASDAQ 100 (NDX)
+* Dow Jones (DJI)
+* FTSE 100 (UKX)
+* Nifty 50 (NSE)
+* CSI 300 (CSI) *(in V1 UI)*
+
+**5. Commodities & Global FX**
+
+* Gold (GC)
+* Silver (SI)
+* WTI Crude (CL)
+* US Dollar Index (DXY)
+* USD/JPY
+* USD/INR
+
+---
+
+## Roadmap
+
+**V1 (current)** — Mock dashboard, asset universe above, clock banner, SVG yield curve, column/block layout (Rates · Equities · Commodities/FX on top row; Spreads · Sovereign below; curve monitor under blocks).
+
+**Post-V1** — Live data via service modules, charting library for richer curves, economic releases (CPI, NFP, etc.), calendars, watchlists, alerts (see Dashboard Priorities).
+
+---
+
 ## Technology Stack
 
 Framework:
@@ -119,20 +182,21 @@ Consistency is preferred over experimentation.
 
 ## Dashboard Priorities
 
-Priority 1:
+Priority 1 (aligned with **V1 asset universe** above):
 
-* US Treasury yields
-* Yield curve spreads
+* US Rates & Funding (EFFR, SOFR, 3M, 2Y, 10Y, 30Y)
+* Yield spreads (2s10s, 10s30s)
+* Global sovereign 10Y (Bunds, JGB, Australia)
+* Global equities and China indices (CSI 300)
+* Commodities & FX (Gold, Silver, WTI, DXY, USD/JPY, USD/INR)
+
+Priority 1 — data releases (post-V1 feeds):
+
 * Fed Funds expectations
 * CPI
 * PPI
 * Nonfarm Payrolls
 * Unemployment Rate
-* DXY
-* Gold
-* WTI
-* Brent
-* Copper
 
 Priority 2:
 
