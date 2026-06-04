@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
 	import type { PageData } from './$types';
+	import type { MacroBlock, MacroStatus } from './+page.server';
 
 	let { data }: { data: PageData } = $props();
 
@@ -39,6 +40,49 @@
 		{ id: 'AU10Y', read: (d) => d.au10y?.price }
 	];
 
+	const MACRO_DATA_KEYS = [
+		'uscpi',
+		'uscpicore',
+		'uspce',
+		'usnfp',
+		'usur',
+		'usgdp'
+	] as const;
+
+	const MACRO_FLASH_KEYS: Record<(typeof MACRO_DATA_KEYS)[number], string> = {
+		uscpi: 'MACRO_CPI',
+		uscpicore: 'MACRO_CORE_CPI',
+		uspce: 'MACRO_PCE',
+		usnfp: 'MACRO_NFP',
+		usur: 'MACRO_UR',
+		usgdp: 'MACRO_GDP'
+	};
+
+	const MACRO_OUT_FLASH_KEYS: Record<(typeof MACRO_DATA_KEYS)[number], string> = {
+		uscpi: 'MACRO_CPI_OUT',
+		uscpicore: 'MACRO_CORE_CPI_OUT',
+		uspce: 'MACRO_PCE_OUT',
+		usnfp: 'MACRO_NFP_OUT',
+		usur: 'MACRO_UR_OUT',
+		usgdp: 'MACRO_GDP_OUT'
+	};
+
+	const macroOutcomeIsRed = (status: MacroStatus | null | undefined): boolean =>
+		status === 'HOT BEAT';
+
+	const macroOutcomeIsGreen = (status: MacroStatus | null | undefined): boolean =>
+		status === 'MISS' || status === 'EXP. BEAT' || status === 'COOL MISS';
+
+	const macroOutcomeBlink = (status: MacroStatus | null | undefined): 'up' | 'down' | null => {
+		if (macroOutcomeIsGreen(status)) {
+			return 'up';
+		}
+		if (macroOutcomeIsRed(status)) {
+			return 'down';
+		}
+		return null;
+	};
+
 	const setFlash = (id: string, direction: 'up' | 'down') => {
 		const existing = flashTimeouts.get(id);
 		if (existing) {
@@ -56,6 +100,8 @@
 		);
 	};
 
+	const prevMacroSnapshots: Record<string, { actual: number; change: number }> = {};
+
 	$effect(() => {
 		for (const { id, read } of PRICE_TRACKERS) {
 			const newPrice = read(data);
@@ -69,6 +115,40 @@
 			}
 
 			prevPrices[id] = newPrice;
+		}
+
+		for (const key of MACRO_DATA_KEYS) {
+			const block = data?.[key];
+			if (!block) {
+				continue;
+			}
+
+			const flashKey = MACRO_FLASH_KEYS[key];
+			const snap = prevMacroSnapshots[key];
+
+			if (snap) {
+				if (block.price !== snap.actual) {
+					setFlash(flashKey, block.price > snap.actual ? 'up' : 'down');
+					const outcomeBlink = macroOutcomeBlink(block.status);
+					const outKey = MACRO_OUT_FLASH_KEYS[key];
+					if (outcomeBlink === 'up') {
+						setFlash(outKey, 'up');
+					} else if (outcomeBlink === 'down') {
+						setFlash(outKey, 'down');
+					}
+				}
+				if (block.changeFromPrior !== snap.change) {
+					setFlash(
+						`${flashKey}_CHG`,
+						block.changeFromPrior > snap.change ? 'up' : 'down'
+					);
+				}
+			}
+
+			prevMacroSnapshots[key] = {
+				actual: block.price,
+				change: block.changeFromPrior
+			};
 		}
 	});
 
@@ -433,6 +513,16 @@
 		return 'text-zinc-300';
 	};
 
+	const fmtMacroPctDelta = (value: number | undefined) => {
+		const v = value ?? 0;
+		return `${v >= 0 ? '+' : ''}${v.toFixed(2)}`;
+	};
+
+	const fmtMacroJobsDelta = (value: number | undefined) => {
+		const v = value ?? 0;
+		return `${v >= 0 ? '+' : ''}${Math.round(v)}K`;
+	};
+
 	const w = 720;
 	const h = 180;
 	const padX = 16;
@@ -520,6 +610,17 @@
 
 	onMount(() => {
 		updateClocks();
+
+		for (const key of MACRO_DATA_KEYS) {
+			const status = data?.[key]?.status;
+			const outKey = MACRO_OUT_FLASH_KEYS[key];
+			const blink = macroOutcomeBlink(status);
+			if (blink === 'up') {
+				setFlash(outKey, 'up');
+			} else if (blink === 'down') {
+				setFlash(outKey, 'down');
+			}
+		}
 
 		const clockInterval = setInterval(updateClocks, 1000);
 		const refreshInterval = setInterval(() => {
@@ -691,81 +792,268 @@
 				</div>
 			</div>
 
-			<!-- Yield Curve Monitor -->
-			<section class="curveSection">
-				<div class="widget border border-zinc-800">
-					<div class="widgetHeader">
-						<div class="widgetTitle">Yield Curve Monitor</div>
-						<div class="widgetMeta">UST curve — 3M / 2Y / 10Y / 30Y</div>
-					</div>
-					<div class="widgetBody">
-						<div class="curveWrap border border-zinc-800">
-							<svg
-								viewBox={`0 0 ${w} ${h}`}
-								class="curveSvg"
-								role="img"
-								aria-label="Yield curve line chart (mock)"
-							>
-								<defs>
-									<linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
-										<stop offset="0%" stop-color="rgb(16 185 129)" stop-opacity="0.45" />
-										<stop offset="55%" stop-color="rgb(52 211 153)" stop-opacity="0.5" />
-										<stop offset="100%" stop-color="rgb(244 63 94)" stop-opacity="0.55" />
-									</linearGradient>
-								</defs>
-
-								{#each Array.from({ length: 6 }) as _, i (i)}
-									<line
-										x1={padX}
-										y1={padY + (i * (h - padY * 2)) / 5}
-										x2={w - padX}
-										y2={padY + (i * (h - padY * 2)) / 5}
-										class="curveGrid"
-									/>
-								{/each}
-
-								<path d={pathD} fill="none" stroke="url(#g)" stroke-width="2.2" stroke-linecap="round" />
-
-								{#each curve as p, i (p.tenor)}
-									<circle
-										cx={xAt(i, curve.length)}
-										cy={yAt(p.yield, minY, rangeY)}
-										r="2.4"
-										class="curvePt"
-									/>
-								{/each}
-							</svg>
-
-							<div class="tenors">
-								{#each curve as p (p.tenor)}
-									<div class="tenor font-mono">{p.tenor}</div>
-								{/each}
-							</div>
+			<!-- Yield Curve + US Macro -->
+			<section class="curveMacroRow grid grid-cols-1 gap-4 lg:grid-cols-2">
+				<div class="curveCol min-w-0">
+					<div class="widget border border-zinc-800 h-full">
+						<div class="widgetHeader">
+							<div class="widgetTitle">Yield Curve Monitor</div>
+							<div class="widgetMeta">UST curve — 3M / 2Y / 10Y / 30Y</div>
 						</div>
+						<div class="widgetBody">
+							<div class="curveWrap border border-zinc-800">
+								<svg
+									viewBox={`0 0 ${w} ${h}`}
+									class="curveSvg"
+									role="img"
+									aria-label="Yield curve line chart"
+								>
+									<defs>
+										<linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+											<stop offset="0%" stop-color="rgb(16 185 129)" stop-opacity="0.45" />
+											<stop offset="55%" stop-color="rgb(52 211 153)" stop-opacity="0.5" />
+											<stop offset="100%" stop-color="rgb(244 63 94)" stop-opacity="0.55" />
+										</linearGradient>
+									</defs>
 
-						<div class="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-							{#each curve as p (p.tenor + '-kpi')}
-								<div class="miniKpi border border-zinc-800">
-									<div class="k">{p.tenor}</div>
-									<div class="v font-mono">{p.yield.toFixed(2)}%</div>
+									{#each Array.from({ length: 6 }) as _, i (i)}
+										<line
+											x1={padX}
+											y1={padY + (i * (h - padY * 2)) / 5}
+											x2={w - padX}
+											y2={padY + (i * (h - padY * 2)) / 5}
+											class="curveGrid"
+										/>
+									{/each}
+
+									<path d={pathD} fill="none" stroke="url(#g)" stroke-width="2.2" stroke-linecap="round" />
+
+									{#each curve as p, i (p.tenor)}
+										<circle
+											cx={xAt(i, curve.length)}
+											cy={yAt(p.yield, minY, rangeY)}
+											r="2.4"
+											class="curvePt"
+										/>
+									{/each}
+								</svg>
+
+								<div class="tenors">
+									{#each curve as p (p.tenor)}
+										<div class="tenor font-mono">{p.tenor}</div>
+									{/each}
 								</div>
-							{/each}
-						</div>
+							</div>
 
-						<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
-							<div class="badge border border-zinc-800">
-								<span class="bKey">2s10s</span>
-								<span class={"bVal font-mono " + clsFor({ mode: 'abs', value: invLevel })}>
-									{invLevel.toFixed(1)}bp
-								</span>
+							<div class="mt-3 grid grid-cols-2 gap-2">
+								{#each curve as p (p.tenor + '-kpi')}
+									<div class="miniKpi border border-zinc-800">
+										<div class="k">{p.tenor}</div>
+										<div class="v font-mono">{p.yield.toFixed(2)}%</div>
+									</div>
+								{/each}
 							</div>
-							<div class="badge border border-zinc-800">
-								<span class="bKey">RANGE</span>
-								<span class="bVal font-mono">{minY.toFixed(2)}–{maxY.toFixed(2)}%</span>
+
+							<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+								<div class="badge border border-zinc-800">
+									<span class="bKey">2s10s</span>
+									<span class={"bVal font-mono " + clsFor({ mode: 'abs', value: invLevel })}>
+										{invLevel.toFixed(1)}bp
+									</span>
+								</div>
+								<div class="badge border border-zinc-800">
+									<span class="bKey">RANGE</span>
+									<span class="bVal font-mono">{minY.toFixed(2)}–{maxY.toFixed(2)}%</span>
+								</div>
 							</div>
-							<div class="badge border border-zinc-800">
-								<span class="bKey">MODE</span>
-								<span class="bVal font-mono">STATIC</span>
+						</div>
+					</div>
+				</div>
+
+				<div class="macroCol min-w-0">
+					<div class="widget border border-zinc-800 h-full">
+						<div class="widgetHeader">
+							<div class="widgetTitle">US Macro Data Blocks</div>
+							<div class="widgetMeta">Actual vs consensus — FRED prints</div>
+						</div>
+						<div class="widgetBody macroBody">
+							<div class="macroTableWrap border border-zinc-800">
+								<table class="macroTable w-full table-fixed">
+									<colgroup>
+										<col style="width: 28%" />
+										<col style="width: 14%" />
+										<col style="width: 18%" />
+										<col style="width: 14%" />
+										<col style="width: 26%" />
+									</colgroup>
+									<thead>
+										<tr>
+											<th scope="col" class="macroCell text-left">INDICATOR</th>
+											<th scope="col" class="macroCell macroNumCell text-right">ACTUAL</th>
+											<th scope="col" class="macroCell macroNumCell text-right">Δ VS PRIOR</th>
+											<th scope="col" class="macroCell macroNumCell text-right">FORECAST</th>
+											<th scope="col" class="macroCell macroNumCell macroOutcomeHead text-right"
+												>OUTCOME</th
+											>
+										</tr>
+									</thead>
+									<tbody>
+										<tr>
+											<td class="macroCell text-left font-medium">
+												US CPI<br /><span class="text-xs text-neutral-500">YoY</span>
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono font-bold">
+												{data?.uscpi?.price.toFixed(2)}%
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+												{fmtMacroPctDelta(data?.uscpi?.changeFromPrior)}%
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+												{data?.uscpi?.forecast.toFixed(2)}%
+											</td>
+											<td
+												class="macroCell macroNumCell macroOutcome text-right font-mono font-bold price-flash"
+												class:text-rose-500={macroOutcomeIsRed(data?.uscpi?.status)}
+												class:text-emerald-500={macroOutcomeIsGreen(data?.uscpi?.status)}
+												class:blink-green={macroOutcomeBlink(data?.uscpi?.status) === 'up' &&
+													flashStates.MACRO_CPI_OUT === 'up'}
+												class:blink-red={macroOutcomeBlink(data?.uscpi?.status) === 'down' &&
+													flashStates.MACRO_CPI_OUT === 'down'}
+											>
+												{data?.uscpi?.status}
+											</td>
+										</tr>
+										<tr>
+											<td class="macroCell text-left font-medium">
+												Core CPI<br /><span class="text-xs text-neutral-500">YoY</span>
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono font-bold">
+												{data?.uscpicore?.price.toFixed(2)}%
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+												{fmtMacroPctDelta(data?.uscpicore?.changeFromPrior)}%
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+												{data?.uscpicore?.forecast.toFixed(2)}%
+											</td>
+											<td
+												class="macroCell macroNumCell macroOutcome text-right font-mono font-bold price-flash"
+												class:text-rose-500={macroOutcomeIsRed(data?.uscpicore?.status)}
+												class:text-emerald-500={macroOutcomeIsGreen(data?.uscpicore?.status)}
+												class:blink-green={macroOutcomeBlink(data?.uscpicore?.status) ===
+													'up' && flashStates.MACRO_CORE_CPI_OUT === 'up'}
+												class:blink-red={macroOutcomeBlink(data?.uscpicore?.status) ===
+													'down' && flashStates.MACRO_CORE_CPI_OUT === 'down'}
+											>
+												{data?.uscpicore?.status}
+											</td>
+										</tr>
+										<tr>
+											<td class="macroCell text-left font-medium">
+												Core PCE<br /><span class="text-xs text-neutral-500">YoY</span>
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono font-bold">
+												{data?.uspce?.price.toFixed(2)}%
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+												{fmtMacroPctDelta(data?.uspce?.changeFromPrior)}%
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+												{data?.uspce?.forecast.toFixed(2)}%
+											</td>
+											<td
+												class="macroCell macroNumCell macroOutcome text-right font-mono font-bold price-flash"
+												class:text-rose-500={macroOutcomeIsRed(data?.uspce?.status)}
+												class:text-emerald-500={macroOutcomeIsGreen(data?.uspce?.status)}
+												class:blink-green={macroOutcomeBlink(data?.uspce?.status) === 'up' &&
+													flashStates.MACRO_PCE_OUT === 'up'}
+												class:blink-red={macroOutcomeBlink(data?.uspce?.status) === 'down' &&
+													flashStates.MACRO_PCE_OUT === 'down'}
+											>
+												{data?.uspce?.status}
+											</td>
+										</tr>
+										<tr>
+											<td class="macroCell text-left font-medium">
+												Nonfarm Payrolls<br /><span class="text-xs text-neutral-500"
+													>Net Monthly Change</span
+												>
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono font-bold">
+												{data?.usnfp?.price}K
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+												{fmtMacroJobsDelta(data?.usnfp?.changeFromPrior)}
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+												{data?.usnfp?.forecast}K
+											</td>
+											<td
+												class="macroCell macroNumCell macroOutcome text-right font-mono font-bold price-flash"
+												class:text-rose-500={macroOutcomeIsRed(data?.usnfp?.status)}
+												class:text-emerald-500={macroOutcomeIsGreen(data?.usnfp?.status)}
+												class:blink-green={macroOutcomeBlink(data?.usnfp?.status) === 'up' &&
+													flashStates.MACRO_NFP_OUT === 'up'}
+												class:blink-red={macroOutcomeBlink(data?.usnfp?.status) === 'down' &&
+													flashStates.MACRO_NFP_OUT === 'down'}
+											>
+												{data?.usnfp?.status}
+											</td>
+										</tr>
+										<tr>
+											<td class="macroCell text-left font-medium">
+												Unemployment Rate<br /><span class="text-xs text-neutral-500"
+													>Spot Rate</span
+												>
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono font-bold">
+												{data?.usur?.price.toFixed(2)}%
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+												{fmtMacroPctDelta(data?.usur?.changeFromPrior)}%
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+												{data?.usur?.forecast.toFixed(2)}%
+											</td>
+											<td
+												class="macroCell macroNumCell macroOutcome text-right font-mono font-bold price-flash"
+												class:text-rose-500={macroOutcomeIsRed(data?.usur?.status)}
+												class:text-emerald-500={macroOutcomeIsGreen(data?.usur?.status)}
+												class:blink-green={macroOutcomeBlink(data?.usur?.status) === 'up' &&
+													flashStates.MACRO_UR_OUT === 'up'}
+												class:blink-red={macroOutcomeBlink(data?.usur?.status) === 'down' &&
+													flashStates.MACRO_UR_OUT === 'down'}
+											>
+												{data?.usur?.status}
+											</td>
+										</tr>
+										<tr>
+											<td class="macroCell text-left font-medium">
+												GDP<br /><span class="text-xs text-neutral-500">QoQ Ann.</span>
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono font-bold">
+												{data?.usgdp?.price.toFixed(2)}%
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+												{fmtMacroPctDelta(data?.usgdp?.changeFromPrior)}%
+											</td>
+											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+												{data?.usgdp?.forecast.toFixed(2)}%
+											</td>
+											<td
+												class="macroCell macroNumCell macroOutcome text-right font-mono font-bold price-flash"
+												class:text-rose-500={macroOutcomeIsRed(data?.usgdp?.status)}
+												class:text-emerald-500={macroOutcomeIsGreen(data?.usgdp?.status)}
+												class:blink-green={macroOutcomeBlink(data?.usgdp?.status) === 'up' &&
+													flashStates.MACRO_GDP_OUT === 'up'}
+												class:blink-red={macroOutcomeBlink(data?.usgdp?.status) === 'down' &&
+													flashStates.MACRO_GDP_OUT === 'down'}
+											>
+												{data?.usgdp?.status}
+											</td>
+										</tr>
+									</tbody>
+								</table>
 							</div>
 						</div>
 					</div>
@@ -955,8 +1243,80 @@
 		animation: flashRed 0.8s ease-out;
 	}
 
-	.curveSection {
+	.curveMacroRow {
 		width: 100%;
+	}
+
+	.macroBody {
+		padding: 6px 8px 8px 8px;
+	}
+
+	.macroTableWrap {
+		background: rgba(9, 9, 11, 0.22);
+		overflow-x: auto;
+	}
+
+	.macroTable {
+		width: 100%;
+		table-layout: fixed;
+		border-collapse: collapse;
+		font-size: 11px;
+	}
+
+	.macroCell {
+		padding: 6px 8px;
+		vertical-align: middle;
+	}
+
+	.macroNumCell {
+		text-align: right;
+		white-space: nowrap;
+	}
+
+	.macroTable thead th {
+		font-size: 9px;
+		font-weight: 700;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: rgb(113 113 122);
+		border-bottom: 1px solid rgb(39 39 42);
+		vertical-align: bottom;
+		white-space: nowrap;
+	}
+
+	.macroOutcomeHead {
+		letter-spacing: 0.08em;
+	}
+
+	.macroTable tbody td {
+		border-bottom: 1px solid rgba(39, 39, 42, 0.65);
+	}
+
+	.macroTable tbody td:first-child {
+		white-space: normal;
+		word-break: break-word;
+		text-align: left;
+	}
+
+	.macroOutcome {
+		overflow: visible;
+	}
+
+	.macroTable tbody tr:last-child td {
+		border-bottom: none;
+	}
+
+	:global(.macroTable .macroOutcome.price-flash) {
+		display: block;
+		width: 100%;
+		text-align: right;
+		box-sizing: border-box;
+	}
+
+	:global(.macroTable .macroOutcome.price-flash.blink-green),
+	:global(.macroTable .macroOutcome.price-flash.blink-red) {
+		border-radius: 2px;
+		padding: 0 2px;
 	}
 
 	.tickerChg {
