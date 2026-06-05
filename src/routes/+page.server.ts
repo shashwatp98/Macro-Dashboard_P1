@@ -19,6 +19,24 @@ const TRADINGVIEW_SCAN_TICKERS = [
 	'TVC:AU10Y'
 ] as const;
 
+const TV_CB_QUOTE_SYMBOLS =
+	'ECONOMICS:USINTR,ECONOMICS:EUINTR,ECONOMICS:ININTR,ECONOMICS:JPINTR,ECONOMICS:CAINTR,ECONOMICS:GBINTR,ECONOMICS:AUINTR';
+
+const TV_CB_QUOTES_URL = `https://widgets.tradingview.com/api/v1/quotes?symbols=${TV_CB_QUOTE_SYMBOLS}`;
+
+const CB_SYMBOL_SUFFIX_TO_KEY: Record<
+	'USINTR' | 'EUINTR' | 'ININTR' | 'JPINTR' | 'CAINTR' | 'GBINTR' | 'AUINTR',
+	keyof CentralBanks
+> = {
+	USINTR: 'us',
+	EUINTR: 'eu',
+	ININTR: 'in',
+	JPINTR: 'jp',
+	CAINTR: 'ca',
+	GBINTR: 'gb',
+	AUINTR: 'au'
+};
+
 type MacroPayloadKey = 'uscpi' | 'uscpicore' | 'uspce' | 'usnfp' | 'usur' | 'usgdp';
 
 /** Debug: keep at 0 so macro prints are never frozen in memory. */
@@ -102,6 +120,16 @@ export type MacroBlock = {
 	changeFromPrior: number;
 	forecast: number;
 	status: MacroStatus;
+};
+
+export type CentralBanks = {
+	us: number;
+	eu: number;
+	in: number;
+	jp: number;
+	ca: number;
+	gb: number;
+	au: number;
 };
 
 type YahooChartMeta = {
@@ -252,6 +280,71 @@ const FALLBACK: MarketLivePayload = {
 	spread2s10s: { price: 0.05, change: -0.02 },
 	spread10s30s: { price: 0.52, change: 0.01 },
 	...OFFICIAL_MACRO_2026
+};
+
+const FALLBACK_CENTRAL_BANKS: CentralBanks = {
+	us: 4.5,
+	eu: 2.0,
+	in: 6.5,
+	jp: 0.5,
+	ca: 2.75,
+	gb: 4.5,
+	au: 4.35
+};
+
+type TvWidgetQuoteValue = number | { lp?: number; [key: string]: unknown };
+
+type TvWidgetQuotesResponse = {
+	results?: Array<{
+		s?: string;
+		v?: TvWidgetQuoteValue;
+	}>;
+};
+
+const parseCbQuoteRate = (value: TvWidgetQuoteValue | undefined): number | null => {
+	if (typeof value === 'number' && Number.isFinite(value)) {
+		return value;
+	}
+
+	if (value && typeof value === 'object' && typeof value.lp === 'number' && Number.isFinite(value.lp)) {
+		return value.lp;
+	}
+
+	return null;
+};
+
+const fetchCentralBankRates = async (): Promise<CentralBanks> => {
+	const rates: CentralBanks = { ...FALLBACK_CENTRAL_BANKS };
+
+	const cbResponse = await fetch(TV_CB_QUOTES_URL, {
+		headers: TV_FETCH_HEADERS,
+		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+	});
+
+	if (!cbResponse.ok) {
+		throw new Error(`TradingView CB quotes responded with ${cbResponse.status}`);
+	}
+
+	const json = (await cbResponse.json()) as TvWidgetQuotesResponse;
+
+	for (const entry of json.results ?? []) {
+		const suffix = entry.s?.split(':')[1] as keyof typeof CB_SYMBOL_SUFFIX_TO_KEY | undefined;
+		if (!suffix) {
+			continue;
+		}
+
+		const key = CB_SYMBOL_SUFFIX_TO_KEY[suffix];
+		if (!key) {
+			continue;
+		}
+
+		const rate = parseCbQuoteRate(entry.v);
+		if (rate !== null) {
+			rates[key] = rate;
+		}
+	}
+
+	return rates;
 };
 
 const TV_FETCH_HEADERS = {
@@ -631,6 +724,14 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
 
 	applyYieldSpreads(payload);
 
+	let centralBanks: CentralBanks = { ...FALLBACK_CENTRAL_BANKS };
+
+	try {
+		centralBanks = await fetchCentralBankRates();
+	} catch (error) {
+		console.error('TradingView CB Quotes Fetch Failed:', error);
+	}
+
 	console.log('SUCCESS! Macro Data:', {
 		btc: payload.liveBitcoin,
 		effr: payload.effr,
@@ -642,5 +743,5 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
 		de10y: payload.de10y
 	});
 
-	return payload;
+	return { ...payload, centralBanks };
 };
