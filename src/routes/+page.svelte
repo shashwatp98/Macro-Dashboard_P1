@@ -732,40 +732,40 @@
 	</div>
 
 	<div
-		class="w-full flex flex-wrap items-center gap-3 bg-neutral-900/50 border-b border-neutral-800 p-2 px-4 mb-4"
+		class="w-full flex flex-nowrap overflow-x-auto select-none scrollbar-none items-center gap-3 bg-neutral-900/50 border-b border-neutral-800 p-2 px-4 mb-4"
 		aria-label="Global policy rates"
 	>
 		<span
-			class="text-xs font-bold uppercase tracking-wider text-neutral-400 mr-2 border-r border-neutral-700 pr-3"
+			class="shrink-0 text-xs font-bold uppercase tracking-wider text-neutral-400 mr-2 border-r border-neutral-700 pr-3"
 			>POLICY RATES:</span
 		>
-		<div class="flex items-center gap-1.5 text-xs">
+		<div class="flex shrink-0 items-center gap-1.5 text-xs">
 			<span class="text-neutral-400 font-medium">FED</span>
-			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.us.toFixed(2)}%</span>
+			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.us}%</span>
 		</div>
-		<div class="flex items-center gap-1.5 text-xs">
+		<div class="flex shrink-0 items-center gap-1.5 text-xs">
 			<span class="text-neutral-400 font-medium">ECB</span>
-			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.eu.toFixed(2)}%</span>
+			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.eu}%</span>
 		</div>
-		<div class="flex items-center gap-1.5 text-xs">
+		<div class="flex shrink-0 items-center gap-1.5 text-xs">
 			<span class="text-neutral-400 font-medium">RBI</span>
-			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.in.toFixed(2)}%</span>
+			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.in}%</span>
 		</div>
-		<div class="flex items-center gap-1.5 text-xs">
+		<div class="flex shrink-0 items-center gap-1.5 text-xs">
 			<span class="text-neutral-400 font-medium">BOJ</span>
-			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.jp.toFixed(2)}%</span>
+			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.jp}%</span>
 		</div>
-		<div class="flex items-center gap-1.5 text-xs">
+		<div class="flex shrink-0 items-center gap-1.5 text-xs">
 			<span class="text-neutral-400 font-medium">BoC</span>
-			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.ca.toFixed(2)}%</span>
+			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.ca}%</span>
 		</div>
-		<div class="flex items-center gap-1.5 text-xs">
+		<div class="flex shrink-0 items-center gap-1.5 text-xs">
 			<span class="text-neutral-400 font-medium">BoE</span>
-			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.gb.toFixed(2)}%</span>
+			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.gb}%</span>
 		</div>
-		<div class="flex items-center gap-1.5 text-xs">
+		<div class="flex shrink-0 items-center gap-1.5 text-xs">
 			<span class="text-neutral-400 font-medium">RBA</span>
-			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.au.toFixed(2)}%</span>
+			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.au}%</span>
 		</div>
 	</div>
 

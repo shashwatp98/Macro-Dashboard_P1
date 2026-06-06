@@ -42,6 +42,26 @@ type MacroPayloadKey = 'uscpi' | 'uscpicore' | 'uspce' | 'usnfp' | 'usur' | 'usg
 /** Debug: keep at 0 so macro prints are never frozen in memory. */
 const MACRO_CACHE_TTL_MS = 0;
 
+const FRED_GRAPH_BASE = 'https://fred.stlouisfed.org/graph/fredgraph.csv';
+const FRED_OBSERVATION_START = '2020-01-01';
+
+type FredMacroKind = 'yoy' | 'nfp_net' | 'spot' | 'gdp_qoq';
+
+type FredMacroSeriesConfig = {
+	seriesId: string;
+	kind: FredMacroKind;
+	forecast: number;
+};
+
+const FRED_MACRO_SERIES: Record<MacroPayloadKey, FredMacroSeriesConfig> = {
+	uscpi: { seriesId: 'CPIAUCSL', kind: 'yoy', forecast: 3.5 },
+	uscpicore: { seriesId: 'CPILFESL', kind: 'yoy', forecast: 2.6 },
+	uspce: { seriesId: 'PCEPILFE', kind: 'yoy', forecast: 3.2 },
+	usnfp: { seriesId: 'PAYEMS', kind: 'nfp_net', forecast: 165 },
+	usur: { seriesId: 'UNRATE', kind: 'spot', forecast: 4.2 },
+	usgdp: { seriesId: 'GDPC1', kind: 'gdp_qoq', forecast: 2.8 }
+};
+
 /** Official 2026 institutional baselines — authoritative dashboard prints. */
 const OFFICIAL_MACRO_2026: MacroBlocksBundle = {
 	uscpi: {
@@ -63,10 +83,10 @@ const OFFICIAL_MACRO_2026: MacroBlocksBundle = {
 		status: 'HOT BEAT'
 	},
 	usnfp: {
-		price: parseFloat('115'),
-		changeFromPrior: parseFloat('-70'),
+		price: parseFloat('172'),
+		changeFromPrior: parseFloat('-7'),
 		forecast: parseFloat('165'),
-		status: 'MISS'
+		status: 'EXP. BEAT'
 	},
 	usur: {
 		price: parseFloat('4.30'),
@@ -123,13 +143,13 @@ export type MacroBlock = {
 };
 
 export type CentralBanks = {
-	us: number;
-	eu: number;
-	in: number;
-	jp: number;
-	ca: number;
-	gb: number;
-	au: number;
+	us: string;
+	eu: string;
+	in: string;
+	jp: string;
+	ca: string;
+	gb: string;
+	au: string;
 };
 
 type YahooChartMeta = {
@@ -195,6 +215,11 @@ type MacroBlocksBundle = Pick<
 	'uscpi' | 'uscpicore' | 'uspce' | 'usnfp' | 'usur' | 'usgdp'
 >;
 
+type FredObservation = {
+	date: string;
+	value: number;
+};
+
 let macroBlocksCache: { at: number; blocks: MacroBlocksBundle } | null = null;
 
 const YAHOO_SYMBOL_TO_KEY: Record<
@@ -239,9 +264,199 @@ const getOfficialMacroBlocks = (): MacroBlocksBundle => ({
 	usgdp: { ...OFFICIAL_MACRO_2026.usgdp }
 });
 
-const loadOfficialMacroBlocks = (): MacroBlocksBundle => {
+const roundMacroRate = (value: number, decimals = 2): number => {
+	const factor = 10 ** decimals;
+	return Math.round(value * factor) / factor;
+};
+
+const evaluateMacroStatus = (
+	key: MacroPayloadKey,
+	actual: number,
+	forecast: number
+): MacroStatus => {
+	if (actual === forecast) {
+		return 'INLINE';
+	}
+
+	if (key === 'usnfp' || key === 'usgdp') {
+		return actual > forecast ? 'EXP. BEAT' : 'MISS';
+	}
+
+	return actual > forecast ? 'HOT BEAT' : 'COOL MISS';
+};
+
+const buildMacroBlock = (
+	key: MacroPayloadKey,
+	obs: [number, number],
+	forecast: number
+): MacroBlock => {
+	const price = parseFloat(String(obs[0]));
+	const prior = parseFloat(String(obs[1]));
+	const changeFromPrior = parseFloat(String(price - prior));
+	const forecastNum = parseFloat(String(forecast));
+
+	return {
+		price,
+		changeFromPrior,
+		forecast: forecastNum,
+		status: evaluateMacroStatus(key, price, forecastNum)
+	};
+};
+
+const parseFredCsv = (csv: string): FredObservation[] => {
+	const observations: FredObservation[] = [];
+
+	for (const line of csv.trim().split('\n')) {
+		if (!line || line.startsWith('observation') || line.startsWith('DATE')) {
+			continue;
+		}
+
+		const [date, rawValue] = line.split(',');
+		if (!date || !rawValue || rawValue === '.') {
+			continue;
+		}
+
+		const value = Number.parseFloat(rawValue);
+		if (!Number.isFinite(value)) {
+			continue;
+		}
+
+		observations.push({ date: date.trim(), value });
+	}
+
+	return observations;
+};
+
+const fetchFredSeries = async (seriesId: string): Promise<FredObservation[]> => {
+	const url = `${FRED_GRAPH_BASE}?id=${encodeURIComponent(seriesId)}&cosd=${FRED_OBSERVATION_START}&_=${Date.now()}`;
+	const response = await fetch(url, {
+		headers: { Accept: 'text/csv' },
+		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+	});
+
+	if (!response.ok) {
+		throw new Error(`FRED ${seriesId} responded with ${response.status}`);
+	}
+
+	return parseFredCsv(await response.text());
+};
+
+const yoyPercentAt = (points: FredObservation[], endIndex: number): number | null => {
+	if (endIndex < 12 || endIndex >= points.length) {
+		return null;
+	}
+
+	const latest = points[endIndex].value;
+	const yearAgo = points[endIndex - 12].value;
+	if (yearAgo === 0) {
+		return null;
+	}
+
+	return ((latest / yearAgo) - 1) * 100;
+};
+
+const qoqAnnualizedAt = (points: FredObservation[], endIndex: number): number | null => {
+	if (endIndex < 1 || endIndex >= points.length) {
+		return null;
+	}
+
+	const current = points[endIndex].value;
+	const previous = points[endIndex - 1].value;
+	if (previous === 0) {
+		return null;
+	}
+
+	return (Math.pow(current / previous, 4) - 1) * 100;
+};
+
+const buildMacroBlockFromFred = (
+	key: MacroPayloadKey,
+	config: FredMacroSeriesConfig,
+	points: FredObservation[]
+): MacroBlock | null => {
+	if (points.length < 2) {
+		return null;
+	}
+
+	let obs: [number, number] | null = null;
+
+	switch (config.kind) {
+		case 'yoy': {
+			if (points.length < 13) {
+				return null;
+			}
+			const yoyNow = yoyPercentAt(points, points.length - 1);
+			const yoyPrior = yoyPercentAt(points, points.length - 2);
+			if (yoyNow === null || yoyPrior === null) {
+				return null;
+			}
+			obs = [roundMacroRate(yoyNow), roundMacroRate(yoyPrior)];
+			break;
+		}
+		case 'nfp_net': {
+			if (points.length < 3) {
+				return null;
+			}
+			// obs[0] = latest net monthly change (K); obs[1] = prior month's net change (K)
+			const latest = points[points.length - 1].value;
+			const prior = points[points.length - 2].value;
+			const twoBack = points[points.length - 3].value;
+			obs = [latest - prior, prior - twoBack];
+			break;
+		}
+		case 'spot': {
+			const latest = points[points.length - 1].value;
+			const prior = points[points.length - 2].value;
+			obs = [roundMacroRate(latest), roundMacroRate(prior)];
+			break;
+		}
+		case 'gdp_qoq': {
+			const qoqNow = qoqAnnualizedAt(points, points.length - 1);
+			const qoqPrior = qoqAnnualizedAt(points, points.length - 2);
+			if (qoqNow === null || qoqPrior === null) {
+				return null;
+			}
+			obs = [roundMacroRate(qoqNow), roundMacroRate(qoqPrior)];
+			break;
+		}
+		default:
+			return null;
+	}
+
+	if (!obs) {
+		return null;
+	}
+
+	return buildMacroBlock(key, obs, config.forecast);
+};
+
+const fetchFredMacroBlocks = async (): Promise<MacroBlocksBundle> => {
+	const keys = Object.keys(FRED_MACRO_SERIES) as MacroPayloadKey[];
+	const blocks = getOfficialMacroBlocks();
+
+	const seriesResults = await Promise.all(
+		keys.map(async (key) => {
+			const config = FRED_MACRO_SERIES[key];
+			const points = await fetchFredSeries(config.seriesId);
+			return { key, config, points };
+		})
+	);
+
+	for (const { key, config, points } of seriesResults) {
+		const block = buildMacroBlockFromFred(key, config, points);
+		if (block) {
+			blocks[key] = block;
+		}
+	}
+
+	return blocks;
+};
+
+const loadFredMacroBlocks = async (): Promise<MacroBlocksBundle> => {
 	macroBlocksCache = null;
-	return getOfficialMacroBlocks();
+	const blocks = await fetchFredMacroBlocks();
+	macroBlocksCache = { at: Date.now(), blocks };
+	return blocks;
 };
 
 const applyMacroBlocks = (payload: MarketLivePayload, blocks: MacroBlocksBundle) => {
@@ -282,32 +497,72 @@ const FALLBACK: MarketLivePayload = {
 	...OFFICIAL_MACRO_2026
 };
 
+const CENTRAL_BANK_KEYS = ['us', 'eu', 'in', 'jp', 'ca', 'gb', 'au'] as const satisfies readonly (keyof CentralBanks)[];
+
 const FALLBACK_CENTRAL_BANKS: CentralBanks = {
-	us: 4.5,
-	eu: 2.0,
-	in: 6.5,
-	jp: 0.5,
-	ca: 2.75,
-	gb: 4.5,
-	au: 4.35
+	us: '3.75',
+	eu: '2.15',
+	in: '5.25',
+	jp: '0.75',
+	ca: '2.25',
+	gb: '3.75',
+	au: '4.35'
 };
 
-type TvWidgetQuoteValue = number | { lp?: number; [key: string]: unknown };
+const validateCentralBanks = (banks: CentralBanks): CentralBanks => {
+	for (const key of CENTRAL_BANK_KEYS) {
+		const rate = parseFloat(banks[key]);
+		if (!Number.isFinite(rate) || rate < 0 || rate > 30) {
+			throw new Error(`Invalid policy rate for ${key}: ${banks[key]}`);
+		}
+	}
+	return banks;
+};
+
+const TV_FETCH_HEADERS = {
+	Accept: 'application/json',
+	'User-Agent':
+		'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+};
+
+type TvWidgetQuoteValues = {
+	lp?: number;
+	bid?: number;
+	ask?: number;
+	close?: number;
+	prev_close_price?: number;
+	[key: string]: unknown;
+};
 
 type TvWidgetQuotesResponse = {
 	results?: Array<{
 		s?: string;
-		v?: TvWidgetQuoteValue;
+		v?: number | TvWidgetQuoteValues;
 	}>;
 };
 
-const parseCbQuoteRate = (value: TvWidgetQuoteValue | undefined): number | null => {
-	if (typeof value === 'number' && Number.isFinite(value)) {
-		return value;
+const formatPolicyRate = (rate: number): string => rate.toFixed(2);
+
+/** EUINTR widgets feed often surfaces deposit facility; MRO = deposit + 15bp since Sep 2024. */
+const normalizeEcbMroRate = (rate: number): number => {
+	const cents = Math.round(rate * 100);
+	if (cents % 25 === 0) {
+		return roundMacroRate(rate + 0.15);
+	}
+	return rate;
+};
+
+/** Live policy yield from nested quote fields — raw numeric `v` and `.close` are stale indexes. */
+const extractLivePolicyRate = (value: number | TvWidgetQuoteValues | undefined): number | null => {
+	if (typeof value === 'number' || !value || typeof value !== 'object') {
+		return null;
 	}
 
-	if (value && typeof value === 'object' && typeof value.lp === 'number' && Number.isFinite(value.lp)) {
-		return value.lp;
+	for (const field of ['lp', 'bid', 'ask'] as const) {
+		const candidate = value[field];
+		if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0 && candidate <= 30) {
+			return candidate;
+		}
 	}
 
 	return null;
@@ -338,19 +593,14 @@ const fetchCentralBankRates = async (): Promise<CentralBanks> => {
 			continue;
 		}
 
-		const rate = parseCbQuoteRate(entry.v);
+		const rate = extractLivePolicyRate(entry.v);
 		if (rate !== null) {
-			rates[key] = rate;
+			const normalized = key === 'eu' ? normalizeEcbMroRate(rate) : rate;
+			rates[key] = formatPolicyRate(normalized);
 		}
 	}
 
-	return rates;
-};
-
-const TV_FETCH_HEADERS = {
-	Accept: 'application/json',
-	'User-Agent':
-		'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+	return validateCentralBanks(rates);
 };
 
 const YAHOO_HEADERS = {
@@ -720,7 +970,15 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
 		console.error('TradingView Scanner Fetch Failed:', error);
 	}
 
-	applyMacroBlocks(payload, loadOfficialMacroBlocks());
+	let macroBlocks: MacroBlocksBundle = getOfficialMacroBlocks();
+
+	try {
+		macroBlocks = await loadFredMacroBlocks();
+	} catch (error) {
+		console.error('FRED Macro Fetch Failed:', error);
+	}
+
+	applyMacroBlocks(payload, macroBlocks);
 
 	applyYieldSpreads(payload);
 
@@ -730,6 +988,7 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
 		centralBanks = await fetchCentralBankRates();
 	} catch (error) {
 		console.error('TradingView CB Quotes Fetch Failed:', error);
+		centralBanks = validateCentralBanks(centralBanks);
 	}
 
 	console.log('SUCCESS! Macro Data:', {
