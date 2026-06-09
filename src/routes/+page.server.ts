@@ -20,7 +20,7 @@ const YAHOO_BATCH_SYMBOLS = [
 	'000300.SS',
 	'GC=F',
 	'SI=F',
-	'CL=F',
+	'BZ=F',
 	'DX-Y.NYB',
 	'JPY=X',
 	'INR=X',
@@ -270,7 +270,7 @@ const YAHOO_SYMBOL_TO_KEY: Record<
 	'000300.SS': 'csi',
 	'GC=F': 'gold',
 	'SI=F': 'silver',
-	'CL=F': 'crude',
+	'BZ=F': 'crude',
 	'DX-Y.NYB': 'dxy',
 	'JPY=X': 'usdjpy',
 	'INR=X': 'usdinr'

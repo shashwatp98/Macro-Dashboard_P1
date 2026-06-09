@@ -40,7 +40,7 @@ Fetched on **every** `load` invocation. No server-side TTL cache.
 
 | Provider | Endpoint / method | Data |
 |---|---|---|
-| **Yahoo Finance** | Single batch chart request (`YAHOO_BATCH_SYMBOLS` joined) | BTC, SPX, NDX, DJI, FTSE, NSE, CSI 300, Gold, Silver, WTI, DXY, USD/JPY, USD/INR, US 10Y (`^TNX`), US 30Y (`^TYX`) |
+| **Yahoo Finance** | Single batch chart request (`YAHOO_BATCH_SYMBOLS` joined) | BTC, SPX, NDX, DJI, FTSE, NSE, CSI 300, Gold, Silver, Brent (`BZ=F`), DXY, USD/JPY, USD/INR, US 10Y (`^TNX`), US 30Y (`^TYX`) |
 | **TradingView scanner** | POST `scanner.tradingview.com/global/scan` | EFFR, SOFR (CME SR11 implied), US 3M, US 2Y, DE/JP/AU 10Y |
 
 Yahoo batch is preferred; per-symbol fallback only if batch returns incomplete results.
@@ -168,7 +168,7 @@ INDICATOR · ACTUAL · Δ VS PRIOR · FORECAST · OUTCOME — five `<td>` cells 
 
 **Global Equities:** SPX, NDX, DJI, FTSE, Nifty 50, CSI 300
 
-**Commodities & FX:** Gold, Silver, WTI, DXY, USD/JPY, USD/INR
+**Commodities & FX:** Gold, Silver, Brent Crude, DXY, USD/JPY, USD/INR
 
 **US Macro (FRED):** CPI YoY, Core CPI YoY, Core PCE YoY, NFP, Unemployment, GDP QoQ Ann.
 

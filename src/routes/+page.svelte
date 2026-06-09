@@ -23,7 +23,7 @@
 		{ id: 'CSI', read: (d) => d.csi?.price },
 		{ id: 'GC', read: (d) => d.gold?.price },
 		{ id: 'SI', read: (d) => d.silver?.price },
-		{ id: 'CL', read: (d) => d.crude?.price },
+		{ id: 'BZ', read: (d) => d.crude?.price },
 		{ id: 'DXY', read: (d) => d.dxy?.price },
 		{ id: 'USDJPY', read: (d) => d.usdjpy?.price },
 		{ id: 'USDINR', read: (d) => d.usdinr?.price },
@@ -281,8 +281,8 @@
 			format: 'usd'
 		},
 		{
-			symbol: 'CL',
-			label: 'WTI Crude',
+			symbol: 'BZ',
+			label: 'Brent Crude',
 			currentPrice: data?.crude?.price ?? 78.45,
 			changePct: data?.crude?.changePct ?? -1.41,
 			format: 'usd'
