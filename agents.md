@@ -87,6 +87,8 @@ In-memory caches in `+page.server.ts` (per serverless instance on Vercel):
 ```
 centralBanksCache  — TTL 4 hours
 macroBlocksCache   — TTL 12 hours (bypassed 8:29–8:35 AM ET)
+macroReleaseDatesCache — TTL 24 hours
+fedWatchCache      — TTL 1 hour
 ```
 
 On cache miss or expiry: fetch fresh, update cache. On fetch failure: serve last good cache if available, else fallbacks.
@@ -130,6 +132,9 @@ OUTCOME text lives in an inner `<span class="macroOutcome price-flash">` inside 
 
 * Scrolling duplicate track of all market tickers + spreads + BTC
 * Green/red flash on price change (`price-flash`, 800ms)
+* **Center ribbon macro release alert:** when any of the six US macro indicators (CPI, Core CPI, Core PCE, NFP, Unemployment, GDP) has an official print within the next **24 hours**, a continuously pulsing red `CRITICAL MACRO` message appears centered in the ribbon row above the ticker. Countdown ticks every second client-side; server supplies `macroReleaseAlerts: { labels, releaseAt }[]` from `load()`.
+* Release schedule: **FRED `/series/release` + `/release/dates`** when `FRED_API_KEY` is set; otherwise hardcoded BLS/BEA 2026 calendar in `+page.server.ts`. All prints assumed **8:30 AM ET**. Grouped prints share one alert (e.g. US CPI · Core CPI; NFP · Unemployment). Alert hides once `releaseAt` passes.
+* **Fed Watch (Kalshi):** far-right ribbon shows `FOMC [Kalshi] {date}: {action} ({probability})` from Kalshi `KXFEDDECISION` markets (1h server cache).
 
 ### Policy rates strip
 

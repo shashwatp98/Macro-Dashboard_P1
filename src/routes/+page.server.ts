@@ -65,6 +65,7 @@ const CB_SYMBOL_SUFFIX_TO_KEY: Record<
 type MacroPayloadKey = 'uscpi' | 'uscpicore' | 'uspce' | 'usnfp' | 'usur' | 'usgdp';
 
 const FRED_OBSERVATIONS_BASE = 'https://api.stlouisfed.org/fred/series/observations';
+const FRED_API_BASE = 'https://api.stlouisfed.org/fred';
 const FRED_GRAPH_BASE = 'https://fred.stlouisfed.org/graph/fredgraph.csv';
 const FRED_OBSERVATION_START = '2018-01-01';
 const FRED_OBS_LIMIT = 48;
@@ -207,6 +208,13 @@ export type FedWatch = {
 	action: FedWatchAction;
 	probability: string;
 };
+
+export type MacroReleaseAlert = {
+	labels: string[];
+	releaseAt: string;
+};
+
+export type MacroReleaseAlerts = MacroReleaseAlert[];
 
 type MarketLivePayload = {
 	liveBitcoin: LiveQuote;
@@ -793,6 +801,301 @@ const isFredReleaseWindow = (date = new Date()): boolean => {
 const isTieredCacheFresh = <T>(cache: TieredCacheEntry<T> | null, ttlMs: number): cache is TieredCacheEntry<T> =>
 	cache !== null && Date.now() - cache.at < ttlMs;
 
+const MACRO_RELEASE_DATES_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const MACRO_RELEASE_LOOKAHEAD_MS = 24 * 60 * 60 * 1000;
+const MACRO_RELEASE_HOUR_ET = 8;
+const MACRO_RELEASE_MINUTE_ET = 30;
+
+const MACRO_INDICATOR_LABELS: Record<MacroPayloadKey, string> = {
+	uscpi: 'US CPI',
+	uscpicore: 'Core CPI',
+	uspce: 'Core PCE',
+	usnfp: 'NFP',
+	usur: 'Unemployment',
+	usgdp: 'GDP'
+};
+
+type MacroReleaseGroupConfig = {
+	id: string;
+	seriesId: string;
+	keys: MacroPayloadKey[];
+};
+
+const MACRO_RELEASE_GROUPS: MacroReleaseGroupConfig[] = [
+	{ id: 'bls_cpi', seriesId: 'CPIAUCSL', keys: ['uscpi', 'uscpicore'] },
+	{ id: 'bls_jobs', seriesId: 'PAYEMS', keys: ['usnfp', 'usur'] },
+	{ id: 'bea_pce', seriesId: 'PCEPILFE', keys: ['uspce'] },
+	{ id: 'bea_gdp', seriesId: 'GDPC1', keys: ['usgdp'] }
+];
+
+/** Official BLS/BEA 2026 print dates — fallback when FRED release API is unavailable. */
+const MACRO_RELEASE_FALLBACK_DATES: Record<string, readonly string[]> = {
+	bls_cpi: [
+		'2026-01-13',
+		'2026-02-13',
+		'2026-03-11',
+		'2026-04-10',
+		'2026-05-12',
+		'2026-06-10',
+		'2026-07-14',
+		'2026-08-12',
+		'2026-09-11',
+		'2026-10-14',
+		'2026-11-10',
+		'2026-12-10'
+	],
+	bls_jobs: [
+		'2026-01-09',
+		'2026-02-11',
+		'2026-03-06',
+		'2026-04-03',
+		'2026-05-08',
+		'2026-06-05',
+		'2026-07-02',
+		'2026-08-07',
+		'2026-09-04',
+		'2026-10-02',
+		'2026-11-06',
+		'2026-12-04'
+	],
+	bea_pce: [
+		'2026-02-20',
+		'2026-03-27',
+		'2026-04-30',
+		'2026-05-28',
+		'2026-06-26',
+		'2026-07-31',
+		'2026-08-28',
+		'2026-09-30',
+		'2026-10-30',
+		'2026-11-25',
+		'2026-12-23'
+	],
+	bea_gdp: [
+		'2026-02-20',
+		'2026-04-30',
+		'2026-05-28',
+		'2026-06-25',
+		'2026-07-30',
+		'2026-08-27',
+		'2026-09-25',
+		'2026-10-29',
+		'2026-11-25',
+		'2026-12-23'
+	]
+};
+
+type MacroReleaseGroupSchedule = {
+	groupId: string;
+	releaseDate: string;
+	keys: MacroPayloadKey[];
+};
+
+let macroReleaseDatesCache: TieredCacheEntry<MacroReleaseGroupSchedule[]> | null = null;
+const fredReleaseIdCache = new Map<string, number>();
+
+type FredSeriesReleaseResponse = {
+	release?: { id?: number };
+};
+
+type FredReleaseDatesResponse = {
+	release_dates?: Array<{ date?: string }>;
+};
+
+const getEtOffsetForDate = (isoDate: string): string => {
+	const utc = new Date(`${isoDate}T12:00:00Z`);
+	const etHour = Number(
+		new Intl.DateTimeFormat('en-US', {
+			timeZone: RELEASE_WINDOW_TZ,
+			hour: 'numeric',
+			hour12: false
+		})
+			.formatToParts(utc)
+			.find((part) => part.type === 'hour')?.value ?? 12
+	);
+	const offsetHours = etHour - 12;
+	const sign = offsetHours <= 0 ? '-' : '+';
+	return `${sign}${String(Math.abs(offsetHours)).padStart(2, '0')}:00`;
+};
+
+const releaseAtIsoFromDate = (isoDate: string): string =>
+	`${isoDate}T${String(MACRO_RELEASE_HOUR_ET).padStart(2, '0')}:${String(MACRO_RELEASE_MINUTE_ET).padStart(2, '0')}:00${getEtOffsetForDate(isoDate)}`;
+
+const nextReleaseDateOnOrAfter = (dates: readonly string[], todayEt: string): string | null =>
+	dates.find((date) => date >= todayEt) ?? null;
+
+const fetchFredApiJson = async <T>(endpoint: string, params: Record<string, string>): Promise<T> => {
+	const apiKey = env.FRED_API_KEY?.trim();
+	if (!apiKey) {
+		throw new Error('FRED_API_KEY is not configured');
+	}
+
+	const searchParams = new URLSearchParams({
+		...params,
+		api_key: apiKey,
+		file_type: 'json'
+	});
+	const response = await fetch(`${FRED_API_BASE}/${endpoint}?${searchParams.toString()}`, {
+		headers: { Accept: 'application/json' },
+		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+	});
+
+	if (!response.ok) {
+		throw new Error(`FRED ${endpoint} responded with ${response.status}`);
+	}
+
+	return (await response.json()) as T;
+};
+
+const fetchFredReleaseId = async (seriesId: string): Promise<number> => {
+	const cached = fredReleaseIdCache.get(seriesId);
+	if (cached !== undefined) {
+		return cached;
+	}
+
+	const json = await fetchFredApiJson<FredSeriesReleaseResponse>('series/release', {
+		series_id: seriesId
+	});
+	const releaseId = json.release?.id;
+	if (!releaseId) {
+		throw new Error(`FRED returned no release id for ${seriesId}`);
+	}
+
+	fredReleaseIdCache.set(seriesId, releaseId);
+	return releaseId;
+};
+
+const fetchFredNextReleaseDate = async (
+	releaseId: number,
+	todayEt: string
+): Promise<string | null> => {
+	const json = await fetchFredApiJson<FredReleaseDatesResponse>('release/dates', {
+		release_id: String(releaseId),
+		realtime_start: todayEt,
+		realtime_end: '2027-12-31',
+		include_release_dates_with_no_data: 'true',
+		sort_order: 'asc',
+		limit: '5'
+	});
+
+	for (const row of json.release_dates ?? []) {
+		if (row.date && row.date >= todayEt) {
+			return row.date;
+		}
+	}
+
+	return null;
+};
+
+const fetchFredMacroReleaseSchedules = async (
+	todayEt: string
+): Promise<MacroReleaseGroupSchedule[]> => {
+	const schedules: MacroReleaseGroupSchedule[] = [];
+
+	for (const group of MACRO_RELEASE_GROUPS) {
+		const releaseId = await fetchFredReleaseId(group.seriesId);
+		const releaseDate = await fetchFredNextReleaseDate(releaseId, todayEt);
+		if (!releaseDate) {
+			continue;
+		}
+
+		schedules.push({
+			groupId: group.id,
+			releaseDate,
+			keys: group.keys
+		});
+	}
+
+	if (schedules.length === 0) {
+		throw new Error('FRED returned no upcoming macro release dates');
+	}
+
+	return schedules;
+};
+
+const buildFallbackMacroReleaseSchedules = (todayEt: string): MacroReleaseGroupSchedule[] => {
+	const schedules: MacroReleaseGroupSchedule[] = [];
+
+	for (const group of MACRO_RELEASE_GROUPS) {
+		const dates = MACRO_RELEASE_FALLBACK_DATES[group.id];
+		if (!dates) {
+			continue;
+		}
+
+		const releaseDate = nextReleaseDateOnOrAfter(dates, todayEt);
+		if (!releaseDate) {
+			continue;
+		}
+
+		schedules.push({
+			groupId: group.id,
+			releaseDate,
+			keys: group.keys
+		});
+	}
+
+	return schedules;
+};
+
+const loadMacroReleaseSchedules = async (): Promise<MacroReleaseGroupSchedule[]> => {
+	if (isTieredCacheFresh(macroReleaseDatesCache, MACRO_RELEASE_DATES_CACHE_TTL_MS)) {
+		return macroReleaseDatesCache.data;
+	}
+
+	const todayEt = getTodayEtIsoDate();
+	let schedules: MacroReleaseGroupSchedule[];
+
+	try {
+		schedules = await fetchFredMacroReleaseSchedules(todayEt);
+	} catch (error) {
+		console.warn('FRED macro release dates fetch failed — using fallback calendar:', error);
+		schedules = buildFallbackMacroReleaseSchedules(todayEt);
+	}
+
+	macroReleaseDatesCache = { at: Date.now(), data: schedules };
+	return schedules;
+};
+
+const buildMacroReleaseAlerts = async (now = new Date()): Promise<MacroReleaseAlert[]> => {
+	const schedules = await loadMacroReleaseSchedules();
+	const nowMs = now.getTime();
+	const windowEndMs = nowMs + MACRO_RELEASE_LOOKAHEAD_MS;
+	const alertsByReleaseAt = new Map<string, MacroReleaseAlert>();
+
+	for (const schedule of schedules) {
+		const releaseAt = releaseAtIsoFromDate(schedule.releaseDate);
+		const releaseMs = Date.parse(releaseAt);
+		if (releaseMs <= nowMs || releaseMs > windowEndMs) {
+			continue;
+		}
+
+		const labels = schedule.keys.map((key) => MACRO_INDICATOR_LABELS[key]);
+		const existing = alertsByReleaseAt.get(releaseAt);
+		if (existing) {
+			existing.labels.push(...labels);
+			continue;
+		}
+
+		alertsByReleaseAt.set(releaseAt, { labels: [...labels], releaseAt });
+	}
+
+	return [...alertsByReleaseAt.values()]
+		.map((alert) => ({
+			releaseAt: alert.releaseAt,
+			labels: [...new Set(alert.labels)]
+		}))
+		.sort((a, b) => Date.parse(a.releaseAt) - Date.parse(b.releaseAt));
+};
+
+const loadMacroReleaseAlerts = async (): Promise<MacroReleaseAlert[]> => {
+	try {
+		return await buildMacroReleaseAlerts();
+	} catch (error) {
+		console.error('Macro release alert build failed:', error);
+		return [];
+	}
+};
+
 const loadCentralBankRatesTiered = async (): Promise<CentralBanks> => {
 	if (isTieredCacheFresh(centralBanksCache, CB_CACHE_TTL_MS)) {
 		return centralBanksCache.data;
@@ -1374,6 +1677,7 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
 	}
 
 	const fedWatch = await loadFedWatchTiered();
+	const macroReleaseAlerts = await loadMacroReleaseAlerts();
 
 	console.log('SUCCESS! Macro Data:', {
 		btc: payload.liveBitcoin,
@@ -1386,5 +1690,5 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
 		de10y: payload.de10y
 	});
 
-	return { ...payload, centralBanks, fedWatch };
+	return { ...payload, centralBanks, fedWatch, macroReleaseAlerts };
 };

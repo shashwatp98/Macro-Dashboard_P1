@@ -557,6 +557,41 @@
 		return `${hh}:${mm}:${ss}`;
 	};
 
+	const formatReleaseCountdown = (ms: number): string => {
+		const totalSec = Math.floor(ms / 1000);
+		const h = Math.floor(totalSec / 3600);
+		const m = Math.floor((totalSec % 3600) / 60);
+		const s = totalSec % 60;
+		if (h >= 1) {
+			return `${h}h ${String(m).padStart(2, '0')}m ${String(s).padStart(2, '0')}s`;
+		}
+		return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+	};
+
+	const buildMacroReleaseAlertLine = (): string => {
+		const alerts = data.macroReleaseAlerts ?? [];
+		if (alerts.length === 0) {
+			return '';
+		}
+
+		const nowMs = Date.now();
+		const segments = alerts
+			.map((alert) => {
+				const ms = Date.parse(alert.releaseAt) - nowMs;
+				if (ms <= 0) {
+					return null;
+				}
+				return `${alert.labels.join(' · ')} in ${formatReleaseCountdown(ms)}`;
+			})
+			.filter((segment): segment is string => segment !== null);
+
+		if (segments.length === 0) {
+			return '';
+		}
+
+		return `CRITICAL MACRO — ${segments.join(' · ')}`;
+	};
+
 	const formatZoneClock = (timeZone: string) =>
 		new Date().toLocaleTimeString('en-GB', {
 			timeZone,
@@ -571,11 +606,13 @@
 	let delTime = $state('');
 	let tokTime = $state('');
 	let now = $state('');
+	let macroReleaseAlertLine = $state('');
 	let ustOpen = $state(false);
 
 	const updateClocks = () => {
 		const d = new Date();
 		now = headerTime();
+		macroReleaseAlertLine = buildMacroReleaseAlertLine();
 		nyTime = formatZoneClock('America/New_York');
 		lonTime = formatZoneClock('Europe/London');
 		delTime = formatZoneClock('Asia/Kolkata');
@@ -675,10 +712,18 @@
 	<!-- Top summary ticker -->
 	<div class="sticky top-0 z-30 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
 		<div class="mx-auto max-w-[1600px] px-3 py-2">
-			<div class="flex items-center gap-3">
+			<div class="relative flex items-center gap-3">
 				<div class="text-[11px] uppercase tracking-[0.22em] text-zinc-400">
 					Global Macro Dashboard
 				</div>
+				{#if macroReleaseAlertLine}
+					<div
+						class="macro-release-alert pointer-events-none absolute left-1/2 max-w-[50vw] -translate-x-1/2 truncate text-center text-[11px] font-mono uppercase tracking-wider text-rose-400"
+						aria-live="polite"
+					>
+						{macroReleaseAlertLine}
+					</div>
+				{/if}
 				<div class="ml-auto flex items-center gap-3 text-[11px] text-zinc-400">
 					<div class="hidden sm:block">LOCAL</div>
 					<div class="font-mono text-zinc-200">{now}</div>
@@ -1311,6 +1356,24 @@
 
 	:global(.blink-red) {
 		animation: flashRed 0.8s ease-out;
+	}
+
+	@keyframes macroReleasePulse {
+		0%,
+		100% {
+			color: #ef4444;
+			opacity: 1;
+			text-shadow: 0 0 8px rgba(239, 68, 68, 0.35);
+		}
+		50% {
+			color: #fca5a5;
+			opacity: 0.65;
+			text-shadow: none;
+		}
+	}
+
+	:global(.macro-release-alert) {
+		animation: macroReleasePulse 1.2s ease-in-out infinite;
 	}
 
 	.curveMacroRow {
