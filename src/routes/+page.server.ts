@@ -1,3 +1,4 @@
+import { env } from '$env/dynamic/private';
 import type { PageServerLoad } from './$types';
 
 const FETCH_TIMEOUT_MS = 8000;
@@ -39,11 +40,10 @@ const CB_SYMBOL_SUFFIX_TO_KEY: Record<
 
 type MacroPayloadKey = 'uscpi' | 'uscpicore' | 'uspce' | 'usnfp' | 'usur' | 'usgdp';
 
-/** Debug: keep at 0 so macro prints are never frozen in memory. */
-const MACRO_CACHE_TTL_MS = 0;
-
+const FRED_OBSERVATIONS_BASE = 'https://api.stlouisfed.org/fred/series/observations';
 const FRED_GRAPH_BASE = 'https://fred.stlouisfed.org/graph/fredgraph.csv';
-const FRED_OBSERVATION_START = '2020-01-01';
+const FRED_OBSERVATION_START = '2018-01-01';
+const FRED_OBS_LIMIT = 48;
 
 type FredMacroKind = 'yoy' | 'nfp_net' | 'spot' | 'gdp_qoq';
 
@@ -215,12 +215,10 @@ type MacroBlocksBundle = Pick<
 	'uscpi' | 'uscpicore' | 'uspce' | 'usnfp' | 'usur' | 'usgdp'
 >;
 
-type FredObservation = {
+type FredRawObservation = {
 	date: string;
-	value: number;
+	value: string;
 };
-
-let macroBlocksCache: { at: number; blocks: MacroBlocksBundle } | null = null;
 
 const YAHOO_SYMBOL_TO_KEY: Record<
 	string,
@@ -255,15 +253,6 @@ const YAHOO_SYMBOL_TO_KEY: Record<
 	'INR=X': 'usdinr'
 };
 
-const getOfficialMacroBlocks = (): MacroBlocksBundle => ({
-	uscpi: { ...OFFICIAL_MACRO_2026.uscpi },
-	uscpicore: { ...OFFICIAL_MACRO_2026.uscpicore },
-	uspce: { ...OFFICIAL_MACRO_2026.uspce },
-	usnfp: { ...OFFICIAL_MACRO_2026.usnfp },
-	usur: { ...OFFICIAL_MACRO_2026.usur },
-	usgdp: { ...OFFICIAL_MACRO_2026.usgdp }
-});
-
 const roundMacroRate = (value: number, decimals = 2): number => {
 	const factor = 10 ** decimals;
 	return Math.round(value * factor) / factor;
@@ -287,12 +276,10 @@ const evaluateMacroStatus = (
 
 const buildMacroBlock = (
 	key: MacroPayloadKey,
-	obs: [number, number],
+	price: number,
+	changeFromPrior: number,
 	forecast: number
 ): MacroBlock => {
-	const price = parseFloat(String(obs[0]));
-	const prior = parseFloat(String(obs[1]));
-	const changeFromPrior = parseFloat(String(price - prior));
 	const forecastNum = parseFloat(String(forecast));
 
 	return {
@@ -303,8 +290,8 @@ const buildMacroBlock = (
 	};
 };
 
-const parseFredCsv = (csv: string): FredObservation[] => {
-	const observations: FredObservation[] = [];
+const parseFredCsvDesc = (csv: string): FredRawObservation[] => {
+	const observations: FredRawObservation[] = [];
 
 	for (const line of csv.trim().split('\n')) {
 		if (!line || line.startsWith('observation') || line.startsWith('DATE')) {
@@ -316,20 +303,67 @@ const parseFredCsv = (csv: string): FredObservation[] => {
 			continue;
 		}
 
-		const value = Number.parseFloat(rawValue);
-		if (!Number.isFinite(value)) {
+		const value = rawValue.trim();
+		if (!Number.isFinite(Number.parseFloat(value))) {
 			continue;
 		}
 
 		observations.push({ date: date.trim(), value });
 	}
 
+	return observations.reverse();
+};
+
+type FredApiObservationsResponse = {
+	observations?: Array<{ date?: string; value?: string }>;
+};
+
+const parseFredApiObservationsDesc = (json: FredApiObservationsResponse): FredRawObservation[] => {
+	const observations: FredRawObservation[] = [];
+
+	for (const row of json.observations ?? []) {
+		if (!row.date || !row.value || row.value === '.') {
+			continue;
+		}
+
+		if (!Number.isFinite(Number.parseFloat(row.value))) {
+			continue;
+		}
+
+		observations.push({ date: row.date, value: row.value });
+	}
+
 	return observations;
 };
 
-const fetchFredSeries = async (seriesId: string): Promise<FredObservation[]> => {
-	const url = `${FRED_GRAPH_BASE}?id=${encodeURIComponent(seriesId)}&cosd=${FRED_OBSERVATION_START}&_=${Date.now()}`;
-	const response = await fetch(url, {
+const fetchFredObservationsDesc = async (seriesId: string): Promise<FredRawObservation[]> => {
+	const apiKey = env.FRED_API_KEY?.trim();
+
+	if (apiKey) {
+		const params = new URLSearchParams({
+			series_id: seriesId,
+			api_key: apiKey,
+			file_type: 'json',
+			sort_order: 'desc',
+			observation_start: FRED_OBSERVATION_START,
+			limit: String(FRED_OBS_LIMIT)
+		});
+		const url = `${FRED_OBSERVATIONS_BASE}?${params.toString()}`;
+		const response = await fetch(url, {
+			headers: { Accept: 'application/json' },
+			signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+		});
+
+		if (!response.ok) {
+			throw new Error(`FRED API ${seriesId} responded with ${response.status}`);
+		}
+
+		const json = (await response.json()) as FredApiObservationsResponse;
+		return parseFredApiObservationsDesc(json);
+	}
+
+	const csvUrl = `${FRED_GRAPH_BASE}?id=${encodeURIComponent(seriesId)}&cosd=${FRED_OBSERVATION_START}&sort_order=desc&_=${Date.now()}`;
+	const response = await fetch(csvUrl, {
 		headers: { Accept: 'text/csv' },
 		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
 	});
@@ -338,124 +372,151 @@ const fetchFredSeries = async (seriesId: string): Promise<FredObservation[]> => 
 		throw new Error(`FRED ${seriesId} responded with ${response.status}`);
 	}
 
-	return parseFredCsv(await response.text());
+	return parseFredCsvDesc(await response.text());
 };
 
-const yoyPercentAt = (points: FredObservation[], endIndex: number): number | null => {
-	if (endIndex < 12 || endIndex >= points.length) {
-		return null;
-	}
+const formatObsDate = (year: number, month: number): string =>
+	`${year}-${String(month).padStart(2, '0')}-01`;
 
-	const latest = points[endIndex].value;
-	const yearAgo = points[endIndex - 12].value;
-	if (yearAgo === 0) {
-		return null;
-	}
-
-	return ((latest / yearAgo) - 1) * 100;
+const yearAgoDate = (date: string): string => {
+	const [yearStr, monthStr] = date.split('-');
+	return formatObsDate(Number(yearStr) - 1, Number(monthStr));
 };
 
-const qoqAnnualizedAt = (points: FredObservation[], endIndex: number): number | null => {
-	if (endIndex < 1 || endIndex >= points.length) {
-		return null;
+const priorMonthDate = (date: string): string => {
+	const year = Number(date.split('-')[0]);
+	const month = Number(date.split('-')[1]);
+	if (month === 1) {
+		return formatObsDate(year - 1, 12);
 	}
-
-	const current = points[endIndex].value;
-	const previous = points[endIndex - 1].value;
-	if (previous === 0) {
-		return null;
-	}
-
-	return (Math.pow(current / previous, 4) - 1) * 100;
+	return formatObsDate(year, month - 1);
 };
 
-const buildMacroBlockFromFred = (
-	key: MacroPayloadKey,
-	config: FredMacroSeriesConfig,
-	points: FredObservation[]
-): MacroBlock | null => {
-	if (points.length < 2) {
+/** FRED quarterly prints use Jan/Apr/Jul/Oct anchor dates. */
+const priorQuarterDate = (date: string): string => {
+	const year = Number(date.split('-')[0]);
+	const month = Number(date.split('-')[1]);
+	if (month <= 3) {
+		return formatObsDate(year - 1, 10);
+	}
+	if (month <= 6) {
+		return formatObsDate(year, 1);
+	}
+	if (month <= 9) {
+		return formatObsDate(year, 4);
+	}
+	return formatObsDate(year, 7);
+};
+
+const buildObsValueMap = (obs: FredRawObservation[]): Map<string, number> => {
+	const byDate = new Map<string, number>();
+	for (const row of obs) {
+		byDate.set(row.date, parseFloat(row.value));
+	}
+	return byDate;
+};
+
+const metricSeriesFromObs = (
+	kind: FredMacroKind,
+	obs: FredRawObservation[]
+): number[] | null => {
+	if (obs.length < 2) {
 		return null;
 	}
 
-	let obs: [number, number] | null = null;
+	const byDate = buildObsValueMap(obs);
 
-	switch (config.kind) {
+	switch (kind) {
 		case 'yoy': {
-			if (points.length < 13) {
-				return null;
+			const metrics: number[] = [];
+			for (const row of obs) {
+				const yearAgo = byDate.get(yearAgoDate(row.date));
+				if (yearAgo === undefined || yearAgo === 0) {
+					continue;
+				}
+				const current = parseFloat(row.value);
+				metrics.push(roundMacroRate(((current / yearAgo) - 1) * 100));
 			}
-			const yoyNow = yoyPercentAt(points, points.length - 1);
-			const yoyPrior = yoyPercentAt(points, points.length - 2);
-			if (yoyNow === null || yoyPrior === null) {
-				return null;
-			}
-			obs = [roundMacroRate(yoyNow), roundMacroRate(yoyPrior)];
-			break;
+			return metrics.length >= 2 ? metrics : null;
 		}
 		case 'nfp_net': {
-			if (points.length < 3) {
-				return null;
+			const metrics: number[] = [];
+			for (const row of obs) {
+				const priorMonth = byDate.get(priorMonthDate(row.date));
+				if (priorMonth === undefined) {
+					continue;
+				}
+				metrics.push(parseFloat(row.value) - priorMonth);
 			}
-			// obs[0] = latest net monthly change (K); obs[1] = prior month's net change (K)
-			const latest = points[points.length - 1].value;
-			const prior = points[points.length - 2].value;
-			const twoBack = points[points.length - 3].value;
-			obs = [latest - prior, prior - twoBack];
-			break;
+			return metrics.length >= 2 ? metrics : null;
 		}
 		case 'spot': {
-			const latest = points[points.length - 1].value;
-			const prior = points[points.length - 2].value;
-			obs = [roundMacroRate(latest), roundMacroRate(prior)];
-			break;
-		}
-		case 'gdp_qoq': {
-			const qoqNow = qoqAnnualizedAt(points, points.length - 1);
-			const qoqPrior = qoqAnnualizedAt(points, points.length - 2);
-			if (qoqNow === null || qoqPrior === null) {
+			const latest = parseFloat(obs[0].value);
+			const priorMonth = byDate.get(priorMonthDate(obs[0].date));
+			if (priorMonth === undefined) {
 				return null;
 			}
-			obs = [roundMacroRate(qoqNow), roundMacroRate(qoqPrior)];
-			break;
+			return [roundMacroRate(latest), roundMacroRate(priorMonth)];
+		}
+		case 'gdp_qoq': {
+			const metrics: number[] = [];
+			for (const row of obs) {
+				const priorQuarter = byDate.get(priorQuarterDate(row.date));
+				if (priorQuarter === undefined || priorQuarter === 0) {
+					continue;
+				}
+				const current = parseFloat(row.value);
+				metrics.push(roundMacroRate((Math.pow(current / priorQuarter, 4) - 1) * 100));
+			}
+			return metrics.length >= 2 ? metrics : null;
 		}
 		default:
 			return null;
 	}
+};
 
-	if (!obs) {
+const buildMacroBlockFromObs = (
+	key: MacroPayloadKey,
+	config: FredMacroSeriesConfig,
+	obs: FredRawObservation[]
+): MacroBlock | null => {
+	const metrics = metricSeriesFromObs(config.kind, obs);
+	if (!metrics || metrics.length < 2) {
 		return null;
 	}
 
-	return buildMacroBlock(key, obs, config.forecast);
+	const price = parseFloat(String(metrics[0]));
+	const changeFromPrior = parseFloat(String(metrics[0] - metrics[1]));
+
+	return buildMacroBlock(key, price, changeFromPrior, config.forecast);
 };
 
 const fetchFredMacroBlocks = async (): Promise<MacroBlocksBundle> => {
 	const keys = Object.keys(FRED_MACRO_SERIES) as MacroPayloadKey[];
-	const blocks = getOfficialMacroBlocks();
+	const blocks: MacroBlocksBundle = {
+		uscpi: { ...OFFICIAL_MACRO_2026.uscpi },
+		uscpicore: { ...OFFICIAL_MACRO_2026.uscpicore },
+		uspce: { ...OFFICIAL_MACRO_2026.uspce },
+		usnfp: { ...OFFICIAL_MACRO_2026.usnfp },
+		usur: { ...OFFICIAL_MACRO_2026.usur },
+		usgdp: { ...OFFICIAL_MACRO_2026.usgdp }
+	};
 
 	const seriesResults = await Promise.all(
 		keys.map(async (key) => {
 			const config = FRED_MACRO_SERIES[key];
-			const points = await fetchFredSeries(config.seriesId);
-			return { key, config, points };
+			const obs = await fetchFredObservationsDesc(config.seriesId);
+			return { key, config, obs };
 		})
 	);
 
-	for (const { key, config, points } of seriesResults) {
-		const block = buildMacroBlockFromFred(key, config, points);
+	for (const { key, config, obs } of seriesResults) {
+		const block = buildMacroBlockFromObs(key, config, obs);
 		if (block) {
 			blocks[key] = block;
 		}
 	}
 
-	return blocks;
-};
-
-const loadFredMacroBlocks = async (): Promise<MacroBlocksBundle> => {
-	macroBlocksCache = null;
-	const blocks = await fetchFredMacroBlocks();
-	macroBlocksCache = { at: Date.now(), blocks };
 	return blocks;
 };
 
@@ -970,10 +1031,17 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
 		console.error('TradingView Scanner Fetch Failed:', error);
 	}
 
-	let macroBlocks: MacroBlocksBundle = getOfficialMacroBlocks();
+	let macroBlocks: MacroBlocksBundle = {
+		uscpi: { ...OFFICIAL_MACRO_2026.uscpi },
+		uscpicore: { ...OFFICIAL_MACRO_2026.uscpicore },
+		uspce: { ...OFFICIAL_MACRO_2026.uspce },
+		usnfp: { ...OFFICIAL_MACRO_2026.usnfp },
+		usur: { ...OFFICIAL_MACRO_2026.usur },
+		usgdp: { ...OFFICIAL_MACRO_2026.usgdp }
+	};
 
 	try {
-		macroBlocks = await loadFredMacroBlocks();
+		macroBlocks = await fetchFredMacroBlocks();
 	} catch (error) {
 		console.error('FRED Macro Fetch Failed:', error);
 	}

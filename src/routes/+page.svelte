@@ -68,10 +68,10 @@
 	};
 
 	const macroOutcomeIsRed = (status: MacroStatus | null | undefined): boolean =>
-		status === 'HOT BEAT';
+		status === 'HOT BEAT' || status === 'MISS';
 
 	const macroOutcomeIsGreen = (status: MacroStatus | null | undefined): boolean =>
-		status === 'MISS' || status === 'EXP. BEAT' || status === 'COOL MISS';
+		status === 'EXP. BEAT' || status === 'COOL MISS';
 
 	const macroOutcomeBlink = (status: MacroStatus | null | undefined): 'up' | 'down' | null => {
 		if (macroOutcomeIsGreen(status)) {
@@ -917,177 +917,202 @@
 						<div class="widgetBody macroBody">
 							<div class="macroTableWrap border border-zinc-800">
 								<table class="macroTable w-full table-fixed">
-									<colgroup>
-										<col style="width: 28%" />
-										<col style="width: 14%" />
-										<col style="width: 18%" />
-										<col style="width: 14%" />
-										<col style="width: 26%" />
-									</colgroup>
 									<thead>
 										<tr>
-											<th scope="col" class="macroCell text-left">INDICATOR</th>
-											<th scope="col" class="macroCell macroNumCell text-right">ACTUAL</th>
-											<th scope="col" class="macroCell macroNumCell text-right">Δ VS PRIOR</th>
-											<th scope="col" class="macroCell macroNumCell text-right">FORECAST</th>
-											<th scope="col" class="macroCell macroNumCell macroOutcomeHead text-right"
+											<th scope="col" class="w-[30%] p-3 text-left text-[9px] font-bold uppercase tracking-[0.14em] text-neutral-500"
+												>INDICATOR</th
+											>
+											<th scope="col" class="w-[15%] p-3 text-right text-[9px] font-bold uppercase tracking-[0.14em] text-neutral-500"
+												>ACTUAL</th
+											>
+											<th scope="col" class="w-[20%] p-3 text-right text-[9px] font-bold uppercase tracking-[0.14em] text-neutral-500"
+												>Δ VS PRIOR</th
+											>
+											<th scope="col" class="w-[15%] p-3 text-right text-[9px] font-bold uppercase tracking-[0.14em] text-neutral-500"
+												>FORECAST</th
+											>
+											<th scope="col" class="w-[20%] p-3 text-right text-[9px] font-bold uppercase tracking-[0.08em] text-neutral-500"
 												>OUTCOME</th
 											>
 										</tr>
 									</thead>
 									<tbody>
 										<tr>
-											<td class="macroCell text-left font-medium">
+											<td class="p-3 text-left font-medium">
 												US CPI<br /><span class="text-xs text-neutral-500">YoY</span>
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono font-bold">
+											<td class="p-3 text-right font-mono font-bold">
 												{data?.uscpi?.price.toFixed(2)}%
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+											<td class="p-3 text-right font-mono text-neutral-400">
 												{fmtMacroPctDelta(data?.uscpi?.changeFromPrior)}%
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+											<td class="p-3 text-right font-mono text-neutral-400">
 												{data?.uscpi?.forecast.toFixed(2)}%
 											</td>
-											<td
-												class="macroCell macroNumCell macroOutcome text-right font-mono font-bold price-flash"
-												class:text-rose-500={macroOutcomeIsRed(data?.uscpi?.status)}
-												class:text-emerald-500={macroOutcomeIsGreen(data?.uscpi?.status)}
-												class:blink-green={macroOutcomeBlink(data?.uscpi?.status) === 'up' &&
-													flashStates.MACRO_CPI_OUT === 'up'}
-												class:blink-red={macroOutcomeBlink(data?.uscpi?.status) === 'down' &&
-													flashStates.MACRO_CPI_OUT === 'down'}
-											>
-												{data?.uscpi?.status}
+											<td class="p-3 text-right">
+												<span
+													class="macroOutcome font-mono font-bold tracking-wider price-flash"
+													class:text-rose-500={data?.uscpi?.status === 'HOT BEAT' ||
+														data?.uscpi?.status === 'MISS'}
+													class:text-emerald-500={data?.uscpi?.status === 'EXP. BEAT' ||
+														data?.uscpi?.status === 'COOL MISS'}
+													class:blink-green={macroOutcomeBlink(data?.uscpi?.status) === 'up' &&
+														flashStates.MACRO_CPI_OUT === 'up'}
+													class:blink-red={macroOutcomeBlink(data?.uscpi?.status) === 'down' &&
+														flashStates.MACRO_CPI_OUT === 'down'}
+												>
+													{data?.uscpi?.status}
+												</span>
 											</td>
 										</tr>
 										<tr>
-											<td class="macroCell text-left font-medium">
+											<td class="p-3 text-left font-medium">
 												Core CPI<br /><span class="text-xs text-neutral-500">YoY</span>
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono font-bold">
+											<td class="p-3 text-right font-mono font-bold">
 												{data?.uscpicore?.price.toFixed(2)}%
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+											<td class="p-3 text-right font-mono text-neutral-400">
 												{fmtMacroPctDelta(data?.uscpicore?.changeFromPrior)}%
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+											<td class="p-3 text-right font-mono text-neutral-400">
 												{data?.uscpicore?.forecast.toFixed(2)}%
 											</td>
-											<td
-												class="macroCell macroNumCell macroOutcome text-right font-mono font-bold price-flash"
-												class:text-rose-500={macroOutcomeIsRed(data?.uscpicore?.status)}
-												class:text-emerald-500={macroOutcomeIsGreen(data?.uscpicore?.status)}
-												class:blink-green={macroOutcomeBlink(data?.uscpicore?.status) ===
-													'up' && flashStates.MACRO_CORE_CPI_OUT === 'up'}
-												class:blink-red={macroOutcomeBlink(data?.uscpicore?.status) ===
-													'down' && flashStates.MACRO_CORE_CPI_OUT === 'down'}
-											>
-												{data?.uscpicore?.status}
+											<td class="p-3 text-right">
+												<span
+													class="macroOutcome font-mono font-bold tracking-wider price-flash"
+													class:text-rose-500={data?.uscpicore?.status === 'HOT BEAT' ||
+														data?.uscpicore?.status === 'MISS'}
+													class:text-emerald-500={data?.uscpicore?.status === 'EXP. BEAT' ||
+														data?.uscpicore?.status === 'COOL MISS'}
+													class:blink-green={macroOutcomeBlink(data?.uscpicore?.status) ===
+														'up' && flashStates.MACRO_CORE_CPI_OUT === 'up'}
+													class:blink-red={macroOutcomeBlink(data?.uscpicore?.status) ===
+														'down' && flashStates.MACRO_CORE_CPI_OUT === 'down'}
+												>
+													{data?.uscpicore?.status}
+												</span>
 											</td>
 										</tr>
 										<tr>
-											<td class="macroCell text-left font-medium">
+											<td class="p-3 text-left font-medium">
 												Core PCE<br /><span class="text-xs text-neutral-500">YoY</span>
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono font-bold">
+											<td class="p-3 text-right font-mono font-bold">
 												{data?.uspce?.price.toFixed(2)}%
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+											<td class="p-3 text-right font-mono text-neutral-400">
 												{fmtMacroPctDelta(data?.uspce?.changeFromPrior)}%
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+											<td class="p-3 text-right font-mono text-neutral-400">
 												{data?.uspce?.forecast.toFixed(2)}%
 											</td>
-											<td
-												class="macroCell macroNumCell macroOutcome text-right font-mono font-bold price-flash"
-												class:text-rose-500={macroOutcomeIsRed(data?.uspce?.status)}
-												class:text-emerald-500={macroOutcomeIsGreen(data?.uspce?.status)}
-												class:blink-green={macroOutcomeBlink(data?.uspce?.status) === 'up' &&
-													flashStates.MACRO_PCE_OUT === 'up'}
-												class:blink-red={macroOutcomeBlink(data?.uspce?.status) === 'down' &&
-													flashStates.MACRO_PCE_OUT === 'down'}
-											>
-												{data?.uspce?.status}
+											<td class="p-3 text-right">
+												<span
+													class="macroOutcome font-mono font-bold tracking-wider price-flash"
+													class:text-rose-500={data?.uspce?.status === 'HOT BEAT' ||
+														data?.uspce?.status === 'MISS'}
+													class:text-emerald-500={data?.uspce?.status === 'EXP. BEAT' ||
+														data?.uspce?.status === 'COOL MISS'}
+													class:blink-green={macroOutcomeBlink(data?.uspce?.status) === 'up' &&
+														flashStates.MACRO_PCE_OUT === 'up'}
+													class:blink-red={macroOutcomeBlink(data?.uspce?.status) === 'down' &&
+														flashStates.MACRO_PCE_OUT === 'down'}
+												>
+													{data?.uspce?.status}
+												</span>
 											</td>
 										</tr>
 										<tr>
-											<td class="macroCell text-left font-medium">
+											<td class="p-3 text-left font-medium">
 												Nonfarm Payrolls<br /><span class="text-xs text-neutral-500"
 													>Net Monthly Change</span
 												>
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono font-bold">
-												{data?.usnfp?.price}K
+											<td class="p-3 text-right font-mono font-bold">
+												{Math.round(data?.usnfp?.price ?? 0)}K
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+											<td class="p-3 text-right font-mono text-neutral-400">
 												{fmtMacroJobsDelta(data?.usnfp?.changeFromPrior)}
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+											<td class="p-3 text-right font-mono text-neutral-400">
 												{data?.usnfp?.forecast}K
 											</td>
-											<td
-												class="macroCell macroNumCell macroOutcome text-right font-mono font-bold price-flash"
-												class:text-rose-500={macroOutcomeIsRed(data?.usnfp?.status)}
-												class:text-emerald-500={macroOutcomeIsGreen(data?.usnfp?.status)}
-												class:blink-green={macroOutcomeBlink(data?.usnfp?.status) === 'up' &&
-													flashStates.MACRO_NFP_OUT === 'up'}
-												class:blink-red={macroOutcomeBlink(data?.usnfp?.status) === 'down' &&
-													flashStates.MACRO_NFP_OUT === 'down'}
-											>
-												{data?.usnfp?.status}
+											<td class="p-3 text-right">
+												<span
+													class="macroOutcome font-mono font-bold tracking-wider price-flash"
+													class:text-rose-500={data?.usnfp?.status === 'HOT BEAT' ||
+														data?.usnfp?.status === 'MISS'}
+													class:text-emerald-500={data?.usnfp?.status === 'EXP. BEAT' ||
+														data?.usnfp?.status === 'COOL MISS'}
+													class:blink-green={macroOutcomeBlink(data?.usnfp?.status) === 'up' &&
+														flashStates.MACRO_NFP_OUT === 'up'}
+													class:blink-red={macroOutcomeBlink(data?.usnfp?.status) === 'down' &&
+														flashStates.MACRO_NFP_OUT === 'down'}
+												>
+													{data?.usnfp?.status}
+												</span>
 											</td>
 										</tr>
 										<tr>
-											<td class="macroCell text-left font-medium">
+											<td class="p-3 text-left font-medium">
 												Unemployment Rate<br /><span class="text-xs text-neutral-500"
 													>Spot Rate</span
 												>
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono font-bold">
+											<td class="p-3 text-right font-mono font-bold">
 												{data?.usur?.price.toFixed(2)}%
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+											<td class="p-3 text-right font-mono text-neutral-400">
 												{fmtMacroPctDelta(data?.usur?.changeFromPrior)}%
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+											<td class="p-3 text-right font-mono text-neutral-400">
 												{data?.usur?.forecast.toFixed(2)}%
 											</td>
-											<td
-												class="macroCell macroNumCell macroOutcome text-right font-mono font-bold price-flash"
-												class:text-rose-500={macroOutcomeIsRed(data?.usur?.status)}
-												class:text-emerald-500={macroOutcomeIsGreen(data?.usur?.status)}
-												class:blink-green={macroOutcomeBlink(data?.usur?.status) === 'up' &&
-													flashStates.MACRO_UR_OUT === 'up'}
-												class:blink-red={macroOutcomeBlink(data?.usur?.status) === 'down' &&
-													flashStates.MACRO_UR_OUT === 'down'}
-											>
-												{data?.usur?.status}
+											<td class="p-3 text-right">
+												<span
+													class="macroOutcome font-mono font-bold tracking-wider price-flash"
+													class:text-rose-500={data?.usur?.status === 'HOT BEAT' ||
+														data?.usur?.status === 'MISS'}
+													class:text-emerald-500={data?.usur?.status === 'EXP. BEAT' ||
+														data?.usur?.status === 'COOL MISS'}
+													class:blink-green={macroOutcomeBlink(data?.usur?.status) === 'up' &&
+														flashStates.MACRO_UR_OUT === 'up'}
+													class:blink-red={macroOutcomeBlink(data?.usur?.status) === 'down' &&
+														flashStates.MACRO_UR_OUT === 'down'}
+												>
+													{data?.usur?.status}
+												</span>
 											</td>
 										</tr>
 										<tr>
-											<td class="macroCell text-left font-medium">
+											<td class="p-3 text-left font-medium">
 												GDP<br /><span class="text-xs text-neutral-500">QoQ Ann.</span>
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono font-bold">
+											<td class="p-3 text-right font-mono font-bold">
 												{data?.usgdp?.price.toFixed(2)}%
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+											<td class="p-3 text-right font-mono text-neutral-400">
 												{fmtMacroPctDelta(data?.usgdp?.changeFromPrior)}%
 											</td>
-											<td class="macroCell macroNumCell text-right font-mono text-neutral-400">
+											<td class="p-3 text-right font-mono text-neutral-400">
 												{data?.usgdp?.forecast.toFixed(2)}%
 											</td>
-											<td
-												class="macroCell macroNumCell macroOutcome text-right font-mono font-bold price-flash"
-												class:text-rose-500={macroOutcomeIsRed(data?.usgdp?.status)}
-												class:text-emerald-500={macroOutcomeIsGreen(data?.usgdp?.status)}
-												class:blink-green={macroOutcomeBlink(data?.usgdp?.status) === 'up' &&
-													flashStates.MACRO_GDP_OUT === 'up'}
-												class:blink-red={macroOutcomeBlink(data?.usgdp?.status) === 'down' &&
-													flashStates.MACRO_GDP_OUT === 'down'}
-											>
-												{data?.usgdp?.status}
+											<td class="p-3 text-right">
+												<span
+													class="macroOutcome font-mono font-bold tracking-wider price-flash"
+													class:text-rose-500={data?.usgdp?.status === 'HOT BEAT' ||
+														data?.usgdp?.status === 'MISS'}
+													class:text-emerald-500={data?.usgdp?.status === 'EXP. BEAT' ||
+														data?.usgdp?.status === 'COOL MISS'}
+													class:blink-green={macroOutcomeBlink(data?.usgdp?.status) === 'up' &&
+														flashStates.MACRO_GDP_OUT === 'up'}
+													class:blink-red={macroOutcomeBlink(data?.usgdp?.status) === 'down' &&
+														flashStates.MACRO_GDP_OUT === 'down'}
+												>
+													{data?.usgdp?.status}
+												</span>
 											</td>
 										</tr>
 									</tbody>
@@ -1301,54 +1326,38 @@
 		font-size: 11px;
 	}
 
-	.macroCell {
-		padding: 6px 8px;
-		vertical-align: middle;
-	}
-
-	.macroNumCell {
-		text-align: right;
-		white-space: nowrap;
-	}
-
 	.macroTable thead th {
-		font-size: 9px;
-		font-weight: 700;
-		letter-spacing: 0.14em;
-		text-transform: uppercase;
-		color: rgb(113 113 122);
 		border-bottom: 1px solid rgb(39 39 42);
 		vertical-align: bottom;
 		white-space: nowrap;
 	}
 
-	.macroOutcomeHead {
-		letter-spacing: 0.08em;
-	}
-
 	.macroTable tbody td {
 		border-bottom: 1px solid rgba(39, 39, 42, 0.65);
+		vertical-align: middle;
 	}
 
 	.macroTable tbody td:first-child {
 		white-space: normal;
 		word-break: break-word;
-		text-align: left;
 	}
 
-	.macroOutcome {
-		overflow: visible;
+	.macroTable tbody td:not(:first-child) {
+		white-space: nowrap;
 	}
 
 	.macroTable tbody tr:last-child td {
 		border-bottom: none;
 	}
 
-	:global(.macroTable .macroOutcome.price-flash) {
-		display: block;
-		width: 100%;
+	.macroTable tbody td:last-child {
 		text-align: right;
-		box-sizing: border-box;
+	}
+
+	:global(.macroTable .macroOutcome.price-flash) {
+		display: inline-block;
+		border-radius: 2px;
+		padding: 0 2px;
 	}
 
 	:global(.macroTable .macroOutcome.price-flash.blink-green),
