@@ -682,10 +682,17 @@
 				<div class="ml-auto flex items-center gap-3 text-[11px] text-zinc-400">
 					<div class="hidden sm:block">LOCAL</div>
 					<div class="font-mono text-zinc-200">{now}</div>
-					<div class="h-3 w-px bg-zinc-800" />
-					<div class="font-mono">
-						2s10s&nbsp;
-						<span class={clsFor({ mode: 'abs', value: invLevel })}>{invLevel.toFixed(1)}bp</span>
+					<div class="h-3 w-px bg-zinc-800"></div>
+					<div class="font-mono text-[11px] text-zinc-400">
+						FOMC [Kalshi] {data.fedWatch.meetingDate}:
+						<span
+							class="font-mono font-bold"
+							class:text-emerald-400={data.fedWatch.action === '25bps CUT'}
+							class:text-neutral-200={data.fedWatch.action === 'HOLD'}
+							class:text-rose-400={data.fedWatch.action === '25bps HIKE'}
+						>
+							{data.fedWatch.action} ({data.fedWatch.probability})
+						</span>
 					</div>
 				</div>
 			</div>

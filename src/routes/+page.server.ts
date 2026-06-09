@@ -6,6 +6,7 @@ const FETCH_TIMEOUT_MS = 8000;
 /** Tiered Cache Engine — track TTLs (Fast Track: Yahoo + TV scan, no server cache). */
 const CB_CACHE_TTL_MS = 4 * 60 * 60 * 1000;
 const MACRO_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const FED_WATCH_CACHE_TTL_MS = 60 * 60 * 1000;
 const RELEASE_WINDOW_TZ = 'America/New_York';
 const RELEASE_WINDOW_START_MIN = 8 * 60 + 29;
 const RELEASE_WINDOW_END_MIN = 8 * 60 + 35;
@@ -197,6 +198,14 @@ type TradingViewScanResponse = {
 		s: string;
 		d: (number | null)[];
 	}>;
+};
+
+export type FedWatchAction = '25bps CUT' | 'HOLD' | '25bps HIKE';
+
+export type FedWatch = {
+	meetingDate: string;
+	action: FedWatchAction;
+	probability: string;
 };
 
 type MarketLivePayload = {
@@ -550,6 +559,217 @@ type TieredCacheEntry<T> = {
 
 let centralBanksCache: TieredCacheEntry<CentralBanks> | null = null;
 let macroBlocksCache: TieredCacheEntry<MacroBlocksBundle> | null = null;
+let fedWatchCache: TieredCacheEntry<FedWatch> | null = null;
+
+/** FOMC decision dates (ET) — second day when applicable. */
+const FOMC_DECISION_DATES = [
+	'2025-01-29',
+	'2025-03-19',
+	'2025-05-07',
+	'2025-06-18',
+	'2025-07-30',
+	'2025-09-17',
+	'2025-10-29',
+	'2025-12-10',
+	'2026-01-29',
+	'2026-03-18',
+	'2026-04-29',
+	'2026-06-17',
+	'2026-07-29',
+	'2026-09-17',
+	'2026-11-05',
+	'2026-12-16',
+	'2027-01-27',
+	'2027-03-17',
+	'2027-04-28',
+	'2027-06-16',
+	'2027-07-28',
+	'2027-09-15',
+	'2027-11-03',
+	'2027-12-15'
+] as const;
+
+const getTodayEtIsoDate = (date = new Date()): string => {
+	const parts = new Intl.DateTimeFormat('en-CA', {
+		timeZone: RELEASE_WINDOW_TZ,
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit'
+	}).formatToParts(date);
+
+	const year = parts.find((part) => part.type === 'year')?.value ?? '1970';
+	const month = parts.find((part) => part.type === 'month')?.value ?? '01';
+	const day = parts.find((part) => part.type === 'day')?.value ?? '01';
+	return `${year}-${month}-${day}`;
+};
+
+const getNextFomcDecisionDate = (date = new Date()): string => {
+	const todayEt = getTodayEtIsoDate(date);
+	const upcoming = FOMC_DECISION_DATES.find((decisionDate) => decisionDate >= todayEt);
+	return upcoming ?? FOMC_DECISION_DATES[FOMC_DECISION_DATES.length - 1];
+};
+
+const formatFomcMeetingDate = (isoDate: string): string => {
+	const label = new Intl.DateTimeFormat('en-US', {
+		timeZone: RELEASE_WINDOW_TZ,
+		month: 'short',
+		day: 'numeric'
+	}).format(new Date(`${isoDate}T12:00:00`));
+
+	const [month, day] = label.split(' ');
+	return `${month.toUpperCase()} ${day}`;
+};
+
+const FALLBACK_FED_WATCH: FedWatch = {
+	meetingDate: 'JUN 17',
+	action: 'HOLD',
+	probability: '98.0%'
+};
+
+const KALSHI_API_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
+
+type KalshiMarket = {
+	subtitle?: string;
+	yes_sub_title?: string;
+	last_price_dollars?: string;
+	yes_bid_dollars?: string;
+	yes_ask_dollars?: string;
+	status?: string;
+};
+
+type KalshiMarketsResponse = {
+	markets?: KalshiMarket[];
+};
+
+const KALSHI_MONTH_CODES = [
+	'JAN',
+	'FEB',
+	'MAR',
+	'APR',
+	'MAY',
+	'JUN',
+	'JUL',
+	'AUG',
+	'SEP',
+	'OCT',
+	'NOV',
+	'DEC'
+] as const;
+
+const toKalshiEventTicker = (decisionIso: string): string => {
+	const monthIndex = Number(decisionIso.split('-')[1]) - 1;
+	const monthCode = KALSHI_MONTH_CODES[monthIndex] ?? 'JUN';
+	const yearCode = decisionIso.slice(2, 4);
+	return `KXFEDDECISION-${yearCode}${monthCode}`;
+};
+
+const parseKalshiProbability = (market: KalshiMarket): number => {
+	for (const field of ['last_price_dollars', 'yes_bid_dollars', 'yes_ask_dollars'] as const) {
+		const raw = market[field];
+		if (!raw) {
+			continue;
+		}
+		const value = Number.parseFloat(raw);
+		if (Number.isFinite(value)) {
+			return value * 100;
+		}
+	}
+	return 0;
+};
+
+const classifyKalshiMarket = (market: KalshiMarket): 'HOLD' | 'CUT' | 'HIKE' | null => {
+	const label = (market.yes_sub_title ?? market.subtitle ?? '').toLowerCase();
+	if (!label) {
+		return null;
+	}
+	if (label.includes('maintain') || label.includes('hold') || label.includes('0bps')) {
+		return 'HOLD';
+	}
+	if (label.includes('cut')) {
+		return 'CUT';
+	}
+	if (label.includes('hike')) {
+		return 'HIKE';
+	}
+	return null;
+};
+
+const fetchKalshiFedWatch = async (decisionIso: string): Promise<FedWatch> => {
+	const eventTicker = toKalshiEventTicker(decisionIso);
+	const url = `${KALSHI_API_BASE}/markets?event_ticker=${encodeURIComponent(eventTicker)}&limit=50`;
+	const response = await fetch(url, {
+		headers: { Accept: 'application/json' },
+		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+	});
+
+	if (!response.ok) {
+		throw new Error(`Kalshi Fed Decision API responded with ${response.status}`);
+	}
+
+	const json = (await response.json()) as KalshiMarketsResponse;
+	const markets = (json.markets ?? []).filter((market) => market.status !== 'closed');
+
+	const buckets: Record<'HOLD' | 'CUT' | 'HIKE', number> = {
+		HOLD: 0,
+		CUT: 0,
+		HIKE: 0
+	};
+
+	for (const market of markets) {
+		const bucket = classifyKalshiMarket(market);
+		if (!bucket) {
+			continue;
+		}
+		buckets[bucket] += parseKalshiProbability(market);
+	}
+
+	const meetingDate = formatFomcMeetingDate(decisionIso);
+	const total = buckets.HOLD + buckets.CUT + buckets.HIKE;
+	if (total <= 0) {
+		throw new Error(`Kalshi returned no usable markets for ${eventTicker}`);
+	}
+
+	let action: FedWatchAction = 'HOLD';
+	let probability = buckets.HOLD;
+	if (buckets.CUT > probability) {
+		action = '25bps CUT';
+		probability = buckets.CUT;
+	}
+	if (buckets.HIKE > probability) {
+		action = '25bps HIKE';
+		probability = buckets.HIKE;
+	}
+
+	return {
+		meetingDate,
+		action,
+		probability: `${probability.toFixed(1)}%`
+	};
+};
+
+const buildFedWatchSnapshot = async (): Promise<FedWatch> => {
+	const decisionDate = getNextFomcDecisionDate();
+	return fetchKalshiFedWatch(decisionDate);
+};
+
+const loadFedWatchTiered = async (): Promise<FedWatch> => {
+	if (isTieredCacheFresh(fedWatchCache, FED_WATCH_CACHE_TTL_MS)) {
+		return fedWatchCache.data;
+	}
+
+	try {
+		const fedWatch = await buildFedWatchSnapshot();
+		fedWatchCache = { at: Date.now(), data: fedWatch };
+		return fedWatch;
+	} catch (error) {
+		if (fedWatchCache) {
+			console.warn('Kalshi Fed Watch fetch failed — serving cached snapshot:', error);
+			return fedWatchCache.data;
+		}
+		console.error('Kalshi Fed Watch fetch failed:', error);
+		return { ...FALLBACK_FED_WATCH, meetingDate: formatFomcMeetingDate(getNextFomcDecisionDate()) };
+	}
+};
 
 const getEasternMinutesSinceMidnight = (date = new Date()): number => {
 	const parts = new Intl.DateTimeFormat('en-US', {
@@ -1153,6 +1373,8 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
 		centralBanks = validateCentralBanks(centralBanks);
 	}
 
+	const fedWatch = await loadFedWatchTiered();
+
 	console.log('SUCCESS! Macro Data:', {
 		btc: payload.liveBitcoin,
 		effr: payload.effr,
@@ -1164,5 +1386,5 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
 		de10y: payload.de10y
 	});
 
-	return { ...payload, centralBanks };
+	return { ...payload, centralBanks, fedWatch };
 };
