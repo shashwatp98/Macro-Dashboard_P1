@@ -3,10 +3,33 @@ import type { PageServerLoad } from './$types';
 
 const FETCH_TIMEOUT_MS = 8000;
 
-const YAHOO_SYMBOLS =
-	'BTC-USD,^GSPC,^NDX,^DJI,^FTSE,^NSEI,000300.SS,GC=F,SI=F,CL=F,DX-Y.NYB,JPY=X,INR=X,^TNX,^TYX';
+/** Tiered Cache Engine — track TTLs (Fast Track: Yahoo + TV scan, no server cache). */
+const CB_CACHE_TTL_MS = 4 * 60 * 60 * 1000;
+const MACRO_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+const RELEASE_WINDOW_TZ = 'America/New_York';
+const RELEASE_WINDOW_START_MIN = 8 * 60 + 29;
+const RELEASE_WINDOW_END_MIN = 8 * 60 + 35;
 
-const YAHOO_SYMBOL_LIST = YAHOO_SYMBOLS.split(',');
+const YAHOO_BATCH_SYMBOLS = [
+	'BTC-USD',
+	'^GSPC',
+	'^NDX',
+	'^DJI',
+	'^FTSE',
+	'^NSEI',
+	'000300.SS',
+	'GC=F',
+	'SI=F',
+	'CL=F',
+	'DX-Y.NYB',
+	'JPY=X',
+	'INR=X',
+	'^TNX',
+	'^TYX'
+] as const;
+
+const YAHOO_SYMBOLS = YAHOO_BATCH_SYMBOLS.join(',');
+const YAHOO_SYMBOL_LIST = [...YAHOO_BATCH_SYMBOLS];
 
 const TRADINGVIEW_SCAN_URL = 'https://scanner.tradingview.com/global/scan';
 
@@ -520,6 +543,74 @@ const fetchFredMacroBlocks = async (): Promise<MacroBlocksBundle> => {
 	return blocks;
 };
 
+type TieredCacheEntry<T> = {
+	at: number;
+	data: T;
+};
+
+let centralBanksCache: TieredCacheEntry<CentralBanks> | null = null;
+let macroBlocksCache: TieredCacheEntry<MacroBlocksBundle> | null = null;
+
+const getEasternMinutesSinceMidnight = (date = new Date()): number => {
+	const parts = new Intl.DateTimeFormat('en-US', {
+		timeZone: RELEASE_WINDOW_TZ,
+		hour: '2-digit',
+		minute: '2-digit',
+		hour12: false
+	}).formatToParts(date);
+
+	const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? 0);
+	const minute = Number(parts.find((part) => part.type === 'minute')?.value ?? 0);
+	return hour * 60 + minute;
+};
+
+/** 8:29–8:35 AM ET — bypass macro cache so CPI/NFP releases snap live. */
+const isFredReleaseWindow = (date = new Date()): boolean => {
+	const minutes = getEasternMinutesSinceMidnight(date);
+	return minutes >= RELEASE_WINDOW_START_MIN && minutes <= RELEASE_WINDOW_END_MIN;
+};
+
+const isTieredCacheFresh = <T>(cache: TieredCacheEntry<T> | null, ttlMs: number): cache is TieredCacheEntry<T> =>
+	cache !== null && Date.now() - cache.at < ttlMs;
+
+const loadCentralBankRatesTiered = async (): Promise<CentralBanks> => {
+	if (isTieredCacheFresh(centralBanksCache, CB_CACHE_TTL_MS)) {
+		return centralBanksCache.data;
+	}
+
+	try {
+		const rates = await fetchCentralBankRates();
+		centralBanksCache = { at: Date.now(), data: rates };
+		return rates;
+	} catch (error) {
+		if (centralBanksCache) {
+			console.warn('TradingView CB Quotes Fetch Failed — serving cached policy rates:', error);
+			return centralBanksCache.data;
+		}
+		throw error;
+	}
+};
+
+const loadFredMacroBlocksTiered = async (): Promise<MacroBlocksBundle> => {
+	const bypassMacroCache = isFredReleaseWindow();
+
+	if (!bypassMacroCache && isTieredCacheFresh(macroBlocksCache, MACRO_CACHE_TTL_MS)) {
+		return macroBlocksCache.data;
+	}
+
+	try {
+		const blocks = await fetchFredMacroBlocks();
+		macroBlocksCache = { at: Date.now(), data: blocks };
+		return blocks;
+	} catch (error) {
+		if (macroBlocksCache) {
+			console.warn('FRED Macro Fetch Failed — serving cached macro blocks:', error);
+			return macroBlocksCache.data;
+		}
+		throw error;
+	}
+};
+
 const applyMacroBlocks = (payload: MarketLivePayload, blocks: MacroBlocksBundle) => {
 	payload.uscpi = blocks.uscpi;
 	payload.uscpicore = blocks.uscpicore;
@@ -997,6 +1088,7 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
 
 	const payload: MarketLivePayload = { ...FALLBACK };
 
+	// Fast Track — Yahoo batch + TradingView yield curves (every load / ~15s client refresh).
 	try {
 		const chartResults = await loadYahooResults();
 		mergeYahooIntoPayload(payload, chartResults);
@@ -1040,8 +1132,9 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
 		usgdp: { ...OFFICIAL_MACRO_2026.usgdp }
 	};
 
+	// Macro Track — FRED series (12h TTL; bypass cache 8:29–8:35 AM ET on release days).
 	try {
-		macroBlocks = await fetchFredMacroBlocks();
+		macroBlocks = await loadFredMacroBlocksTiered();
 	} catch (error) {
 		console.error('FRED Macro Fetch Failed:', error);
 	}
@@ -1052,8 +1145,9 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
 
 	let centralBanks: CentralBanks = { ...FALLBACK_CENTRAL_BANKS };
 
+	// Slow Track — central bank policy rates (4h TTL).
 	try {
-		centralBanks = await fetchCentralBankRates();
+		centralBanks = await loadCentralBankRatesTiered();
 	} catch (error) {
 		console.error('TradingView CB Quotes Fetch Failed:', error);
 		centralBanks = validateCentralBanks(centralBanks);
