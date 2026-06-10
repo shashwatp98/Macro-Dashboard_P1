@@ -2,7 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
 	import type { PageData } from './$types';
-	import type { MacroBlock, MacroStatus } from './+page.server';
+	import type { MacroBlock, MacroStatus, DataSourceTag } from './+page.server';
 
 	let { data }: { data: PageData } = $props();
 
@@ -82,6 +82,10 @@
 		}
 		return null;
 	};
+
+	const marketsSource = $derived(data.dataSources?.markets);
+	const macroSource = $derived(data.dataSources?.macro);
+	const centralBanksSource = $derived(data.dataSources?.centralBanks);
 
 	const setFlash = (id: string, direction: 'up' | 'down') => {
 		const existing = flashTimeouts.get(id);
@@ -785,11 +789,12 @@
 
 	<div
 		class="w-full flex flex-nowrap overflow-x-auto select-none scrollbar-none items-center gap-3 bg-neutral-900/50 border-b border-neutral-800 p-2 px-4 mb-4"
+		class:opacity-75={centralBanksSource === 'fallback'}
 		aria-label="Global policy rates"
 	>
 		<span
 			class="shrink-0 text-xs font-bold uppercase tracking-wider text-neutral-400 mr-2 border-r border-neutral-700 pr-3"
-			>POLICY RATES:</span
+			>POLICY RATES:{#if centralBanksSource === 'cache'}<span class="sourceBadge sourceBadgeCache">CACHED</span>{:else if centralBanksSource === 'fallback'}<span class="sourceBadge sourceBadgeStale">[STALE]</span>{/if}</span
 		>
 		<div class="flex shrink-0 items-center gap-1.5 text-xs">
 			<span class="text-neutral-400 font-medium">FED</span>
@@ -826,13 +831,15 @@
 			<div class="blocksStack">
 				<div class="blocksRow blocksRowPrimary">
 					{#each primaryRow as section (section.id)}
-						{@render sectionPanel(section)}
+						{@render sectionPanel(section, marketsSource)}
 					{/each}
 				</div>
 				<div class="blocksRow blocksRowSecondary">
-					<section class="sectionPanel border border-zinc-800">
+					<section class="sectionPanel border border-zinc-800" class:opacity-75={marketsSource === 'fallback'}>
 						<div class="sectionBand">
-							<h2 class="sectionHeading">{MARKET_DATA.sections.yieldSpreads.title}</h2>
+							<h2 class="sectionHeading">
+								{MARKET_DATA.sections.yieldSpreads.title}{#if marketsSource === 'cache'}<span class="sourceBadge sourceBadgeCache">CACHED</span>{:else if marketsSource === 'fallback'}<span class="sourceBadge sourceBadgeStale">[STALE]</span>{/if}
+							</h2>
 						</div>
 						<div class="sectionBody">
 							<div class="tickerGrid">
@@ -877,7 +884,7 @@
 						</div>
 					</section>
 					{#each secondaryRow as section (section.id)}
-						{@render sectionPanel(section)}
+						{@render sectionPanel(section, marketsSource)}
 					{/each}
 				</div>
 			</div>
@@ -885,9 +892,11 @@
 			<!-- Yield Curve + US Macro -->
 			<section class="curveMacroRow grid grid-cols-1 gap-4 lg:grid-cols-2">
 				<div class="curveCol min-w-0">
-					<div class="widget border border-zinc-800 h-full">
+					<div class="widget border border-zinc-800 h-full" class:opacity-75={marketsSource === 'fallback'}>
 						<div class="widgetHeader">
-							<div class="widgetTitle">Yield Curve Monitor</div>
+							<div class="widgetTitle">
+								Yield Curve Monitor{#if marketsSource === 'cache'}<span class="sourceBadge sourceBadgeCache">CACHED</span>{:else if marketsSource === 'fallback'}<span class="sourceBadge sourceBadgeStale">[STALE]</span>{/if}
+							</div>
 							<div class="widgetMeta">UST curve — 3M / 2Y / 10Y / 30Y</div>
 						</div>
 						<div class="widgetBody">
@@ -961,9 +970,11 @@
 				</div>
 
 				<div class="macroCol min-w-0">
-					<div class="widget border border-zinc-800 h-full">
+					<div class="widget border border-zinc-800 h-full" class:opacity-75={macroSource === 'fallback'}>
 						<div class="widgetHeader">
-							<div class="widgetTitle">US Macro Data Blocks</div>
+							<div class="widgetTitle">
+								US Macro Data Blocks{#if macroSource === 'cache'}<span class="sourceBadge sourceBadgeCache">CACHED</span>{:else if macroSource === 'fallback'}<span class="sourceBadge sourceBadgeStale">[STALE]</span>{/if}
+							</div>
 							<div class="widgetMeta">Actual vs consensus — FRED prints</div>
 						</div>
 						<div class="widgetBody macroBody">
@@ -1178,10 +1189,12 @@
 	</div>
 </main>
 
-{#snippet sectionPanel(section: MarketSection)}
-	<section class="sectionPanel border border-zinc-800">
+{#snippet sectionPanel(section: MarketSection, source: DataSourceTag | undefined)}
+	<section class="sectionPanel border border-zinc-800" class:opacity-75={source === 'fallback'}>
 		<div class="sectionBand">
-			<h2 class="sectionHeading">{section.title}</h2>
+			<h2 class="sectionHeading">
+				{section.title}{#if source === 'cache'}<span class="sourceBadge sourceBadgeCache">CACHED</span>{:else if source === 'fallback'}<span class="sourceBadge sourceBadgeStale">[STALE]</span>{/if}
+			</h2>
 		</div>
 		<div class="sectionBody">
 			<div class="tickerGrid">
@@ -1271,6 +1284,24 @@
 		letter-spacing: 0.18em;
 		color: rgb(228 228 231);
 		line-height: 1.3;
+	}
+
+	.sourceBadge {
+		display: inline-block;
+		margin-left: 6px;
+		font-size: 9px;
+		font-weight: 600;
+		letter-spacing: 0.1em;
+		vertical-align: middle;
+		white-space: nowrap;
+	}
+
+	.sourceBadgeCache {
+		color: rgb(113 113 122);
+	}
+
+	.sourceBadgeStale {
+		color: rgba(244, 63, 94, 0.8);
 	}
 
 	.sectionBody {
