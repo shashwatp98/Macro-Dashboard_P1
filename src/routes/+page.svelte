@@ -1,12 +1,19 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { invalidateAll } from '$app/navigation';
+	import { PUBLIC_REFRESH_ENABLED } from '$env/static/public';
 	import type { PageData } from './$types';
-	import type { MacroBlock, MacroStatus, DataSourceTag } from './+page.server';
+	import type { MacroStatus, DataSourceTag } from './+page.server';
+	import MacroTable from '$lib/components/MacroTable.svelte';
+	import PolicyStrip from '$lib/components/PolicyStrip.svelte';
+	import YieldCurveInline from '$lib/components/YieldCurveInline.svelte';
 
 	let { data }: { data: PageData } = $props();
 
 	type FlashDirection = 'up' | 'down' | null;
+
+	const REFRESH_MS = 15_000;
+	const refreshEnabled = PUBLIC_REFRESH_ENABLED !== 'false';
 
 	const prevPrices: Record<string, number> = {};
 	let flashStates = $state<Record<string, FlashDirection>>({});
@@ -67,19 +74,9 @@
 		usgdp: 'MACRO_GDP_OUT'
 	};
 
-	const macroOutcomeIsRed = (status: MacroStatus | null | undefined): boolean =>
-		status === 'HOT BEAT' || status === 'MISS';
-
-	const macroOutcomeIsGreen = (status: MacroStatus | null | undefined): boolean =>
-		status === 'EXP. BEAT' || status === 'COOL MISS';
-
-	const macroOutcomeBlink = (status: MacroStatus | null | undefined): 'up' | 'down' | null => {
-		if (macroOutcomeIsGreen(status)) {
-			return 'up';
-		}
-		if (macroOutcomeIsRed(status)) {
-			return 'down';
-		}
+	const macroOutcomeBlink = (status: MacroStatus | null | undefined): FlashDirection => {
+		if (status === 'EXP. BEAT' || status === 'COOL MISS') return 'up';
+		if (status === 'HOT BEAT' || status === 'MISS') return 'down';
 		return null;
 	};
 
@@ -156,15 +153,10 @@
 		}
 	});
 
-	// ---------------------------------------------------------------------------
-	// MARKET DATA — single source of truth (V1 mock; swap for API/store later)
-	// ---------------------------------------------------------------------------
-
 	type UsRateKey = 'EFFR' | 'SOFR' | '3M' | 'US2Y' | 'US10Y' | 'US30Y';
 
 	const US_RATE_KEYS: UsRateKey[] = ['EFFR', 'SOFR', '3M', 'US2Y', 'US10Y', 'US30Y'];
 
-	/** US rates & funding — Yahoo 10Y/30Y + TradingView EFFR/SOFR/2Y/3M */
 	const US_RATES = $derived({
 		EFFR: {
 			label: 'EFFR',
@@ -198,13 +190,6 @@
 		}
 	});
 
-	const CURVE_TENORS: { key: UsRateKey; tenor: string }[] = [
-		{ key: '3M', tenor: '3M' },
-		{ key: 'US2Y', tenor: '2Y' },
-		{ key: 'US10Y', tenor: '10Y' },
-		{ key: 'US30Y', tenor: '30Y' }
-	];
-
 	type PriceFormat = 'index' | 'usd' | 'fx';
 
 	type PricedAsset = {
@@ -222,7 +207,6 @@
 		changePct: number;
 	};
 
-	/** Global equities — live quotes from server load */
 	const GLOBAL_EQUITIES = $derived<PricedAsset[]>([
 		{
 			symbol: 'SPX',
@@ -268,7 +252,6 @@
 		}
 	]);
 
-	/** Commodities & FX — live quotes from server load */
 	const COMMODITIES_FX = $derived<PricedAsset[]>([
 		{
 			symbol: 'GC',
@@ -314,7 +297,6 @@
 		}
 	]);
 
-	/** Bitcoin — daily % vs prior close; maps directly to server load (no client-side math) */
 	const BITCOIN = $derived.by(() => ({
 		symbol: 'BTC',
 		label: 'Bitcoin',
@@ -322,14 +304,6 @@
 		changePct: data?.liveBitcoin?.changePct ?? 0.0
 	}));
 
-	const bitcoinTicker = $derived.by((): Ticker => ({
-		symbol: BITCOIN.symbol,
-		label: BITCOIN.label,
-		value: `$${fmtNum(BITCOIN.currentPrice, 2)}`,
-		change: { mode: 'pct', value: BITCOIN.changePct }
-	}));
-
-	/** Global sovereign 10Y — live Yahoo yields (^GD10Y, ^GJ10Y, ^GA10Y) */
 	const GLOBAL_SOVEREIGN = $derived<YieldAsset[]>([
 		{
 			symbol: 'DE10Y',
@@ -351,30 +325,6 @@
 		}
 	]);
 
-	const MARKET_DATA = {
-		layout: {
-			primaryRow: ['usRatesFunding', 'globalEquities', 'commoditiesFx'] as const,
-			secondaryRow: ['globalSovereign'] as const
-		},
-		sections: {
-			usRatesFunding: {
-				title: 'US RATES & FUNDING'
-			},
-			yieldSpreads: {
-				title: 'YIELD SPREADS & CRYPTO'
-			},
-			globalSovereign: {
-				title: 'GLOBAL SOVEREIGN 10Y'
-			},
-			globalEquities: {
-				title: 'GLOBAL EQUITIES'
-			},
-			commoditiesFx: {
-				title: 'COMMODITIES & GLOBAL FX'
-			}
-		}
-	} as const;
-
 	type ChangeMode = 'pct' | 'abs';
 
 	type Change = {
@@ -393,11 +343,6 @@
 		id: string;
 		title: string;
 		items: Ticker[];
-	};
-
-	type CurvePoint = {
-		tenor: string;
-		yield: number;
 	};
 
 	const fmtNum = (n: number, decimals: number) =>
@@ -445,27 +390,34 @@
 		};
 	};
 
+	const bitcoinTicker = $derived.by((): Ticker => ({
+		symbol: BITCOIN.symbol,
+		label: BITCOIN.label,
+		value: `$${fmtNum(BITCOIN.currentPrice, 2)}`,
+		change: { mode: 'pct', value: BITCOIN.changePct }
+	}));
+
 	const usRatesSection = $derived<MarketSection>({
 		id: 'usRatesFunding',
-		title: MARKET_DATA.sections.usRatesFunding.title,
+		title: 'US RATES & FUNDING',
 		items: US_RATE_KEYS.map((key) => toUsRateTicker(key))
 	});
 
 	const equitiesSection = $derived<MarketSection>({
 		id: 'globalEquities',
-		title: MARKET_DATA.sections.globalEquities.title,
+		title: 'GLOBAL EQUITIES',
 		items: GLOBAL_EQUITIES.map((a) => toPricedTicker(a))
 	});
 
 	const commoditiesFxSection = $derived<MarketSection>({
 		id: 'commoditiesFx',
-		title: MARKET_DATA.sections.commoditiesFx.title,
+		title: 'COMMODITIES & GLOBAL FX',
 		items: COMMODITIES_FX.map((a) => toPricedTicker(a))
 	});
 
 	const sovereignSection = $derived<MarketSection>({
 		id: 'globalSovereign',
-		title: MARKET_DATA.sections.globalSovereign.title,
+		title: 'GLOBAL SOVEREIGN 10Y',
 		items: GLOBAL_SOVEREIGN.map((a) => toYieldTicker(a))
 	});
 
@@ -484,11 +436,6 @@
 		}
 	]);
 
-	const spreadsAndCryptoItems = $derived<Ticker[]>([
-		...computedSpreadTickers,
-		bitcoinTicker
-	]);
-
 	const primaryRow = $derived<MarketSection[]>([
 		usRatesSection,
 		equitiesSection,
@@ -496,13 +443,6 @@
 	]);
 
 	const secondaryRow = $derived<MarketSection[]>([sovereignSection]);
-
-	const curve = $derived<CurvePoint[]>(
-		CURVE_TENORS.map(({ key, tenor }) => ({
-			tenor,
-			yield: US_RATES[key].yield
-		}))
-	);
 
 	const fmtSigned = (n: number, digits = 2) => `${n >= 0 ? '+' : ''}${n.toFixed(digits)}`;
 
@@ -516,42 +456,6 @@
 		if (c.value < 0) return 'text-rose-500';
 		return 'text-zinc-300';
 	};
-
-	const fmtMacroPctDelta = (value: number | undefined) => {
-		const v = value ?? 0;
-		return `${v >= 0 ? '+' : ''}${v.toFixed(2)}`;
-	};
-
-	const fmtMacroJobsDelta = (value: number | undefined) => {
-		const v = value ?? 0;
-		return `${v >= 0 ? '+' : ''}${Math.round(v)}K`;
-	};
-
-	const w = 720;
-	const h = 180;
-	const padX = 16;
-	const padY = 14;
-
-	const minY = $derived(Math.min(...curve.map((p) => p.yield)));
-	const maxY = $derived(Math.max(...curve.map((p) => p.yield)));
-	const rangeY = $derived(Math.max(0.0001, maxY - minY));
-
-	const xAt = (i: number, len: number) => padX + (i * (w - padX * 2)) / Math.max(1, len - 1);
-	const yAt = (v: number, min: number, range: number) => {
-		const t = (v - min) / range;
-		return padY + (1 - t) * (h - padY * 2);
-	};
-
-	const pathD = $derived(
-		curve
-			.map(
-				(p, i) =>
-					`${i === 0 ? 'M' : 'L'} ${xAt(i, curve.length).toFixed(2)} ${yAt(p.yield, minY, rangeY).toFixed(2)}`
-			)
-			.join(' ')
-	);
-
-	const invLevel = $derived((US_RATES.US10Y.yield - US_RATES.US2Y.yield) * 100);
 
 	const headerTime = () => {
 		const d = new Date();
@@ -645,7 +549,8 @@
 
 	const tickerItems = $derived([
 		...primaryRow.flatMap((s) => s.items),
-		...spreadsAndCryptoItems,
+		...computedSpreadTickers,
+		bitcoinTicker,
 		...secondaryRow.flatMap((s) => s.items)
 	]);
 
@@ -664,13 +569,42 @@
 		}
 
 		const clockInterval = setInterval(updateClocks, 1000);
-		const refreshInterval = setInterval(() => {
+
+		let refreshInterval: ReturnType<typeof setInterval> | null = null;
+
+		const stopRefresh = () => {
+			if (refreshInterval !== null) {
+				clearInterval(refreshInterval);
+				refreshInterval = null;
+			}
+		};
+
+		const startRefresh = () => {
+			if (!refreshEnabled) return;
+			stopRefresh();
+			refreshInterval = setInterval(() => {
+				invalidateAll();
+			}, REFRESH_MS);
+		};
+
+		const onVisibilityChange = () => {
+			if (document.hidden) {
+				stopRefresh();
+				return;
+			}
 			invalidateAll();
-		}, 15000);
+			startRefresh();
+		};
+
+		if (refreshEnabled) {
+			startRefresh();
+			document.addEventListener('visibilitychange', onVisibilityChange);
+		}
 
 		return () => {
 			clearInterval(clockInterval);
-			clearInterval(refreshInterval);
+			stopRefresh();
+			document.removeEventListener('visibilitychange', onVisibilityChange);
 		};
 	});
 
@@ -704,7 +638,7 @@
 							(ustOpen ? 'bg-emerald-300 animate-pulse' : 'bg-rose-400/60')
 						}
 						aria-hidden="true"
-					/>
+					></span>
 					<span class={ustOpen ? 'text-emerald-300' : 'text-rose-300'}>
 						US TREASURY: {ustOpen ? 'OPEN' : 'CLOSED'}
 					</span>
@@ -787,58 +721,26 @@
 		</div>
 	</div>
 
-	<div
-		class="w-full flex flex-nowrap overflow-x-auto select-none scrollbar-none items-center gap-3 bg-neutral-900/50 border-b border-neutral-800 p-2 px-4 mb-4"
-		class:opacity-75={centralBanksSource === 'fallback'}
-		aria-label="Global policy rates"
-	>
-		<span
-			class="shrink-0 text-xs font-bold uppercase tracking-wider text-neutral-400 mr-2 border-r border-neutral-700 pr-3"
-			>POLICY RATES:{#if centralBanksSource === 'cache'}<span class="sourceBadge sourceBadgeCache">CACHED</span>{:else if centralBanksSource === 'fallback'}<span class="sourceBadge sourceBadgeStale">[STALE]</span>{/if}</span
-		>
-		<div class="flex shrink-0 items-center gap-1.5 text-xs">
-			<span class="text-neutral-400 font-medium">FED</span>
-			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.us}%</span>
-		</div>
-		<div class="flex shrink-0 items-center gap-1.5 text-xs">
-			<span class="text-neutral-400 font-medium">ECB</span>
-			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.eu}%</span>
-		</div>
-		<div class="flex shrink-0 items-center gap-1.5 text-xs">
-			<span class="text-neutral-400 font-medium">RBI</span>
-			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.in}%</span>
-		</div>
-		<div class="flex shrink-0 items-center gap-1.5 text-xs">
-			<span class="text-neutral-400 font-medium">BOJ</span>
-			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.jp}%</span>
-		</div>
-		<div class="flex shrink-0 items-center gap-1.5 text-xs">
-			<span class="text-neutral-400 font-medium">BoC</span>
-			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.ca}%</span>
-		</div>
-		<div class="flex shrink-0 items-center gap-1.5 text-xs">
-			<span class="text-neutral-400 font-medium">BoE</span>
-			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.gb}%</span>
-		</div>
-		<div class="flex shrink-0 items-center gap-1.5 text-xs">
-			<span class="text-neutral-400 font-medium">RBA</span>
-			<span class="font-mono font-bold text-neutral-100">{data.centralBanks.au}%</span>
-		</div>
-	</div>
+	<PolicyStrip centralBanks={data.centralBanks} {centralBanksSource} />
 
 	<div class="mx-auto max-w-[1600px] px-3 pb-6 pt-3">
 		<div class="dashboardLayout">
 			<div class="blocksStack">
-				<div class="blocksRow blocksRowPrimary">
+				<div class="blocksRow blocksRowPrimary" role="region" aria-label="Primary market panels">
 					{#each primaryRow as section (section.id)}
-						{@render sectionPanel(section, marketsSource)}
+						{@render marketSectionPanel(section, marketsSource)}
 					{/each}
 				</div>
-				<div class="blocksRow blocksRowSecondary">
-					<section class="sectionPanel border border-zinc-800" class:opacity-75={marketsSource === 'fallback'}>
+
+				<div class="blocksRow blocksRowSecondary" role="region" aria-label="Secondary market panels">
+					<section
+						class="sectionPanel border border-zinc-800"
+						class:opacity-75={marketsSource === 'fallback'}
+						aria-labelledby="yield-spreads-heading"
+					>
 						<div class="sectionBand">
-							<h2 class="sectionHeading">
-								{MARKET_DATA.sections.yieldSpreads.title}{#if marketsSource === 'cache'}<span class="sourceBadge sourceBadgeCache">CACHED</span>{:else if marketsSource === 'fallback'}<span class="sourceBadge sourceBadgeStale">[STALE]</span>{/if}
+							<h2 id="yield-spreads-heading" class="sectionHeading">
+								YIELD SPREADS & CRYPTO{#if marketsSource === 'cache'}<span class="sourceBadge sourceBadgeCache">CACHED</span>{:else if marketsSource === 'fallback'}<span class="sourceBadge sourceBadgeStale">[STALE]</span>{/if}
 							</h2>
 						</div>
 						<div class="sectionBody">
@@ -883,316 +785,51 @@
 							</div>
 						</div>
 					</section>
+
 					{#each secondaryRow as section (section.id)}
-						{@render sectionPanel(section, marketsSource)}
+						{@render marketSectionPanel(section, marketsSource)}
 					{/each}
 				</div>
 			</div>
 
-			<!-- Yield Curve + US Macro -->
-			<section class="curveMacroRow grid grid-cols-1 gap-4 lg:grid-cols-2">
+			<section class="curveMacroRow grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Yield curve and macro data">
 				<div class="curveCol min-w-0">
-					<div class="widget border border-zinc-800 h-full" class:opacity-75={marketsSource === 'fallback'}>
-						<div class="widgetHeader">
-							<div class="widgetTitle">
-								Yield Curve Monitor{#if marketsSource === 'cache'}<span class="sourceBadge sourceBadgeCache">CACHED</span>{:else if marketsSource === 'fallback'}<span class="sourceBadge sourceBadgeStale">[STALE]</span>{/if}
-							</div>
-							<div class="widgetMeta">UST curve — 3M / 2Y / 10Y / 30Y</div>
-						</div>
-						<div class="widgetBody">
-							<div class="curveWrap border border-zinc-800">
-								<svg
-									viewBox={`0 0 ${w} ${h}`}
-									class="curveSvg"
-									role="img"
-									aria-label="Yield curve line chart"
-								>
-									<defs>
-										<linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
-											<stop offset="0%" stop-color="rgb(16 185 129)" stop-opacity="0.45" />
-											<stop offset="55%" stop-color="rgb(52 211 153)" stop-opacity="0.5" />
-											<stop offset="100%" stop-color="rgb(244 63 94)" stop-opacity="0.55" />
-										</linearGradient>
-									</defs>
-
-									{#each Array.from({ length: 6 }) as _, i (i)}
-										<line
-											x1={padX}
-											y1={padY + (i * (h - padY * 2)) / 5}
-											x2={w - padX}
-											y2={padY + (i * (h - padY * 2)) / 5}
-											class="curveGrid"
-										/>
-									{/each}
-
-									<path d={pathD} fill="none" stroke="url(#g)" stroke-width="2.2" stroke-linecap="round" />
-
-									{#each curve as p, i (p.tenor)}
-										<circle
-											cx={xAt(i, curve.length)}
-											cy={yAt(p.yield, minY, rangeY)}
-											r="2.4"
-											class="curvePt"
-										/>
-									{/each}
-								</svg>
-
-								<div class="tenors">
-									{#each curve as p (p.tenor)}
-										<div class="tenor font-mono">{p.tenor}</div>
-									{/each}
-								</div>
-							</div>
-
-							<div class="mt-3 grid grid-cols-2 gap-2">
-								{#each curve as p (p.tenor + '-kpi')}
-									<div class="miniKpi border border-zinc-800">
-										<div class="k">{p.tenor}</div>
-										<div class="v font-mono">{p.yield.toFixed(2)}%</div>
-									</div>
-								{/each}
-							</div>
-
-							<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
-								<div class="badge border border-zinc-800">
-									<span class="bKey">2s10s</span>
-									<span class={"bVal font-mono " + clsFor({ mode: 'abs', value: invLevel })}>
-										{invLevel.toFixed(1)}bp
-									</span>
-								</div>
-								<div class="badge border border-zinc-800">
-									<span class="bKey">RANGE</span>
-									<span class="bVal font-mono">{minY.toFixed(2)}–{maxY.toFixed(2)}%</span>
-								</div>
-							</div>
-						</div>
-					</div>
+					<YieldCurveInline
+						us3mYield={US_RATES['3M'].yield}
+						us2yYield={US_RATES.US2Y.yield}
+						us10yYield={US_RATES.US10Y.yield}
+						us30yYield={US_RATES.US30Y.yield}
+						spread2s10s={data?.spread2s10s?.price ?? 0.05}
+						spread10s30s={data?.spread10s30s?.price ?? 0.52}
+						{marketsSource}
+					/>
 				</div>
 
 				<div class="macroCol min-w-0">
-					<div class="widget border border-zinc-800 h-full" class:opacity-75={macroSource === 'fallback'}>
-						<div class="widgetHeader">
-							<div class="widgetTitle">
-								US Macro Data Blocks{#if macroSource === 'cache'}<span class="sourceBadge sourceBadgeCache">CACHED</span>{:else if macroSource === 'fallback'}<span class="sourceBadge sourceBadgeStale">[STALE]</span>{/if}
-							</div>
-							<div class="widgetMeta">Actual vs consensus — FRED prints</div>
-						</div>
-						<div class="widgetBody macroBody">
-							<div class="macroTableWrap border border-zinc-800">
-								<table class="macroTable w-full table-fixed">
-									<thead>
-										<tr>
-											<th scope="col" class="w-[30%] p-3 text-left text-[9px] font-bold uppercase tracking-[0.14em] text-neutral-500"
-												>INDICATOR</th
-											>
-											<th scope="col" class="w-[15%] p-3 text-right text-[9px] font-bold uppercase tracking-[0.14em] text-neutral-500"
-												>ACTUAL</th
-											>
-											<th scope="col" class="w-[20%] p-3 text-right text-[9px] font-bold uppercase tracking-[0.14em] text-neutral-500"
-												>Δ VS PRIOR</th
-											>
-											<th scope="col" class="w-[15%] p-3 text-right text-[9px] font-bold uppercase tracking-[0.14em] text-neutral-500"
-												>FORECAST</th
-											>
-											<th scope="col" class="w-[20%] p-3 text-right text-[9px] font-bold uppercase tracking-[0.08em] text-neutral-500"
-												>OUTCOME</th
-											>
-										</tr>
-									</thead>
-									<tbody>
-										<tr>
-											<td class="p-3 text-left font-medium">
-												US CPI<br /><span class="text-xs text-neutral-500">YoY</span>
-											</td>
-											<td class="p-3 text-right font-mono font-bold">
-												{data?.uscpi?.price.toFixed(2)}%
-											</td>
-											<td class="p-3 text-right font-mono text-neutral-400">
-												{fmtMacroPctDelta(data?.uscpi?.changeFromPrior)}%
-											</td>
-											<td class="p-3 text-right font-mono text-neutral-400">
-												{data?.uscpi?.forecast.toFixed(2)}%
-											</td>
-											<td class="p-3 text-right">
-												<span
-													class="macroOutcome font-mono font-bold tracking-wider price-flash"
-													class:text-rose-500={data?.uscpi?.status === 'HOT BEAT' ||
-														data?.uscpi?.status === 'MISS'}
-													class:text-emerald-500={data?.uscpi?.status === 'EXP. BEAT' ||
-														data?.uscpi?.status === 'COOL MISS'}
-													class:blink-green={macroOutcomeBlink(data?.uscpi?.status) === 'up' &&
-														flashStates.MACRO_CPI_OUT === 'up'}
-													class:blink-red={macroOutcomeBlink(data?.uscpi?.status) === 'down' &&
-														flashStates.MACRO_CPI_OUT === 'down'}
-												>
-													{data?.uscpi?.status}
-												</span>
-											</td>
-										</tr>
-										<tr>
-											<td class="p-3 text-left font-medium">
-												Core CPI<br /><span class="text-xs text-neutral-500">YoY</span>
-											</td>
-											<td class="p-3 text-right font-mono font-bold">
-												{data?.uscpicore?.price.toFixed(2)}%
-											</td>
-											<td class="p-3 text-right font-mono text-neutral-400">
-												{fmtMacroPctDelta(data?.uscpicore?.changeFromPrior)}%
-											</td>
-											<td class="p-3 text-right font-mono text-neutral-400">
-												{data?.uscpicore?.forecast.toFixed(2)}%
-											</td>
-											<td class="p-3 text-right">
-												<span
-													class="macroOutcome font-mono font-bold tracking-wider price-flash"
-													class:text-rose-500={data?.uscpicore?.status === 'HOT BEAT' ||
-														data?.uscpicore?.status === 'MISS'}
-													class:text-emerald-500={data?.uscpicore?.status === 'EXP. BEAT' ||
-														data?.uscpicore?.status === 'COOL MISS'}
-													class:blink-green={macroOutcomeBlink(data?.uscpicore?.status) ===
-														'up' && flashStates.MACRO_CORE_CPI_OUT === 'up'}
-													class:blink-red={macroOutcomeBlink(data?.uscpicore?.status) ===
-														'down' && flashStates.MACRO_CORE_CPI_OUT === 'down'}
-												>
-													{data?.uscpicore?.status}
-												</span>
-											</td>
-										</tr>
-										<tr>
-											<td class="p-3 text-left font-medium">
-												Core PCE<br /><span class="text-xs text-neutral-500">YoY</span>
-											</td>
-											<td class="p-3 text-right font-mono font-bold">
-												{data?.uspce?.price.toFixed(2)}%
-											</td>
-											<td class="p-3 text-right font-mono text-neutral-400">
-												{fmtMacroPctDelta(data?.uspce?.changeFromPrior)}%
-											</td>
-											<td class="p-3 text-right font-mono text-neutral-400">
-												{data?.uspce?.forecast.toFixed(2)}%
-											</td>
-											<td class="p-3 text-right">
-												<span
-													class="macroOutcome font-mono font-bold tracking-wider price-flash"
-													class:text-rose-500={data?.uspce?.status === 'HOT BEAT' ||
-														data?.uspce?.status === 'MISS'}
-													class:text-emerald-500={data?.uspce?.status === 'EXP. BEAT' ||
-														data?.uspce?.status === 'COOL MISS'}
-													class:blink-green={macroOutcomeBlink(data?.uspce?.status) === 'up' &&
-														flashStates.MACRO_PCE_OUT === 'up'}
-													class:blink-red={macroOutcomeBlink(data?.uspce?.status) === 'down' &&
-														flashStates.MACRO_PCE_OUT === 'down'}
-												>
-													{data?.uspce?.status}
-												</span>
-											</td>
-										</tr>
-										<tr>
-											<td class="p-3 text-left font-medium">
-												Nonfarm Payrolls<br /><span class="text-xs text-neutral-500"
-													>Net Monthly Change</span
-												>
-											</td>
-											<td class="p-3 text-right font-mono font-bold">
-												{Math.round(data?.usnfp?.price ?? 0)}K
-											</td>
-											<td class="p-3 text-right font-mono text-neutral-400">
-												{fmtMacroJobsDelta(data?.usnfp?.changeFromPrior)}
-											</td>
-											<td class="p-3 text-right font-mono text-neutral-400">
-												{data?.usnfp?.forecast}K
-											</td>
-											<td class="p-3 text-right">
-												<span
-													class="macroOutcome font-mono font-bold tracking-wider price-flash"
-													class:text-rose-500={data?.usnfp?.status === 'HOT BEAT' ||
-														data?.usnfp?.status === 'MISS'}
-													class:text-emerald-500={data?.usnfp?.status === 'EXP. BEAT' ||
-														data?.usnfp?.status === 'COOL MISS'}
-													class:blink-green={macroOutcomeBlink(data?.usnfp?.status) === 'up' &&
-														flashStates.MACRO_NFP_OUT === 'up'}
-													class:blink-red={macroOutcomeBlink(data?.usnfp?.status) === 'down' &&
-														flashStates.MACRO_NFP_OUT === 'down'}
-												>
-													{data?.usnfp?.status}
-												</span>
-											</td>
-										</tr>
-										<tr>
-											<td class="p-3 text-left font-medium">
-												Unemployment Rate<br /><span class="text-xs text-neutral-500"
-													>Spot Rate</span
-												>
-											</td>
-											<td class="p-3 text-right font-mono font-bold">
-												{data?.usur?.price.toFixed(2)}%
-											</td>
-											<td class="p-3 text-right font-mono text-neutral-400">
-												{fmtMacroPctDelta(data?.usur?.changeFromPrior)}%
-											</td>
-											<td class="p-3 text-right font-mono text-neutral-400">
-												{data?.usur?.forecast.toFixed(2)}%
-											</td>
-											<td class="p-3 text-right">
-												<span
-													class="macroOutcome font-mono font-bold tracking-wider price-flash"
-													class:text-rose-500={data?.usur?.status === 'HOT BEAT' ||
-														data?.usur?.status === 'MISS'}
-													class:text-emerald-500={data?.usur?.status === 'EXP. BEAT' ||
-														data?.usur?.status === 'COOL MISS'}
-													class:blink-green={macroOutcomeBlink(data?.usur?.status) === 'up' &&
-														flashStates.MACRO_UR_OUT === 'up'}
-													class:blink-red={macroOutcomeBlink(data?.usur?.status) === 'down' &&
-														flashStates.MACRO_UR_OUT === 'down'}
-												>
-													{data?.usur?.status}
-												</span>
-											</td>
-										</tr>
-										<tr>
-											<td class="p-3 text-left font-medium">
-												GDP<br /><span class="text-xs text-neutral-500">QoQ Ann.</span>
-											</td>
-											<td class="p-3 text-right font-mono font-bold">
-												{data?.usgdp?.price.toFixed(2)}%
-											</td>
-											<td class="p-3 text-right font-mono text-neutral-400">
-												{fmtMacroPctDelta(data?.usgdp?.changeFromPrior)}%
-											</td>
-											<td class="p-3 text-right font-mono text-neutral-400">
-												{data?.usgdp?.forecast.toFixed(2)}%
-											</td>
-											<td class="p-3 text-right">
-												<span
-													class="macroOutcome font-mono font-bold tracking-wider price-flash"
-													class:text-rose-500={data?.usgdp?.status === 'HOT BEAT' ||
-														data?.usgdp?.status === 'MISS'}
-													class:text-emerald-500={data?.usgdp?.status === 'EXP. BEAT' ||
-														data?.usgdp?.status === 'COOL MISS'}
-													class:blink-green={macroOutcomeBlink(data?.usgdp?.status) === 'up' &&
-														flashStates.MACRO_GDP_OUT === 'up'}
-													class:blink-red={macroOutcomeBlink(data?.usgdp?.status) === 'down' &&
-														flashStates.MACRO_GDP_OUT === 'down'}
-												>
-													{data?.usgdp?.status}
-												</span>
-											</td>
-										</tr>
-									</tbody>
-								</table>
-							</div>
-						</div>
-					</div>
+					<MacroTable
+						uscpi={data.uscpi}
+						uscpicore={data.uscpicore}
+						uspce={data.uspce}
+						usnfp={data.usnfp}
+						usur={data.usur}
+						usgdp={data.usgdp}
+						{macroSource}
+						{flashStates}
+					/>
 				</div>
 			</section>
 		</div>
 	</div>
 </main>
 
-{#snippet sectionPanel(section: MarketSection, source: DataSourceTag | undefined)}
-	<section class="sectionPanel border border-zinc-800" class:opacity-75={source === 'fallback'}>
+{#snippet marketSectionPanel(section: MarketSection, source: DataSourceTag | undefined)}
+	<section
+		class="sectionPanel border border-zinc-800"
+		class:opacity-75={source === 'fallback'}
+		aria-labelledby="{section.id}-heading"
+	>
 		<div class="sectionBand">
-			<h2 class="sectionHeading">
+			<h2 id="{section.id}-heading" class="sectionHeading">
 				{section.title}{#if source === 'cache'}<span class="sourceBadge sourceBadgeCache">CACHED</span>{:else if source === 'fallback'}<span class="sourceBadge sourceBadgeStale">[STALE]</span>{/if}
 			</h2>
 		</div>
@@ -1411,172 +1048,10 @@
 		width: 100%;
 	}
 
-	.macroBody {
-		padding: 6px 8px 8px 8px;
-	}
-
-	.macroTableWrap {
-		background: rgba(9, 9, 11, 0.22);
-		overflow-x: auto;
-	}
-
-	.macroTable {
-		width: 100%;
-		table-layout: fixed;
-		border-collapse: collapse;
-		font-size: 11px;
-	}
-
-	.macroTable thead th {
-		border-bottom: 1px solid rgb(39 39 42);
-		vertical-align: bottom;
-		white-space: nowrap;
-	}
-
-	.macroTable tbody td {
-		border-bottom: 1px solid rgba(39, 39, 42, 0.65);
-		vertical-align: middle;
-	}
-
-	.macroTable tbody td:first-child {
-		white-space: normal;
-		word-break: break-word;
-	}
-
-	.macroTable tbody td:not(:first-child) {
-		white-space: nowrap;
-	}
-
-	.macroTable tbody tr:last-child td {
-		border-bottom: none;
-	}
-
-	.macroTable tbody td:last-child {
-		text-align: right;
-	}
-
-	:global(.macroTable .macroOutcome.price-flash) {
-		display: inline-block;
-		border-radius: 2px;
-		padding: 0 2px;
-	}
-
-	:global(.macroTable .macroOutcome.price-flash.blink-green),
-	:global(.macroTable .macroOutcome.price-flash.blink-red) {
-		border-radius: 2px;
-		padding: 0 2px;
-	}
-
 	.tickerChg {
 		font-size: 11px;
 		letter-spacing: 0.02em;
 		white-space: nowrap;
-	}
-
-	.widget {
-		background: rgba(24, 24, 27, 0.78);
-	}
-
-	.widgetHeader {
-		display: flex;
-		align-items: baseline;
-		gap: 10px;
-		padding: 10px 10px 8px 10px;
-		border-bottom: 1px solid rgb(39 39 42);
-		background: rgba(9, 9, 11, 0.35);
-	}
-
-	.widgetTitle {
-		font-size: 11px;
-		text-transform: uppercase;
-		letter-spacing: 0.22em;
-		color: rgb(212 212 216);
-	}
-
-	.widgetMeta {
-		font-size: 11px;
-		color: rgb(113 113 122);
-	}
-
-	.widgetBody {
-		padding: 8px 10px 10px 10px;
-	}
-
-	.miniKpi {
-		background: rgba(9, 9, 11, 0.22);
-		padding: 8px 10px;
-	}
-
-	.miniKpi .k {
-		font-size: 10px;
-		letter-spacing: 0.22em;
-		text-transform: uppercase;
-		color: rgb(113 113 122);
-	}
-
-	.miniKpi .v {
-		margin-top: 4px;
-		font-size: 13px;
-		color: rgb(244 244 245);
-		letter-spacing: 0.02em;
-	}
-
-	.curveWrap {
-		background: rgba(9, 9, 11, 0.2);
-		padding: 10px 10px 8px 10px;
-	}
-
-	.curveSvg {
-		width: 100%;
-		height: auto;
-		display: block;
-	}
-
-	.curveGrid {
-		stroke: rgba(39, 39, 42, 0.65);
-		stroke-width: 1;
-		shape-rendering: crispEdges;
-	}
-
-	.curvePt {
-		fill: rgb(244 244 245);
-		opacity: 0.85;
-	}
-
-	.tenors {
-		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 6px;
-		margin-top: 8px;
-	}
-
-	.tenor {
-		text-align: center;
-		font-size: 10px;
-		color: rgb(161 161 170);
-		letter-spacing: 0.08em;
-		border-top: 1px solid rgba(39, 39, 42, 0.7);
-		padding-top: 6px;
-	}
-
-	.badge {
-		display: inline-flex;
-		align-items: center;
-		gap: 8px;
-		background: rgba(24, 24, 27, 0.5);
-		padding: 4px 8px;
-	}
-
-	.bKey {
-		font-size: 10px;
-		letter-spacing: 0.22em;
-		text-transform: uppercase;
-		color: rgb(113 113 122);
-	}
-
-	.bVal {
-		font-size: 11px;
-		color: rgb(212 212 216);
 	}
 
 	.ticker {
