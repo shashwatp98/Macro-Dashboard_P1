@@ -3,9 +3,12 @@
 	import { invalidateAll } from '$app/navigation';
 	import { PUBLIC_REFRESH_ENABLED } from '$env/static/public';
 	import type { PageData } from './$types';
-	import type { MacroStatus, DataSourceTag } from './+page.server';
+	import type { MacroStatus } from './+page.server';
 	import MacroTable from '$lib/components/MacroTable.svelte';
+	import Panel from '$lib/components/Panel.svelte';
 	import PolicyStrip from '$lib/components/PolicyStrip.svelte';
+	import QuoteRow from '$lib/components/QuoteRow.svelte';
+	import StatusPill from '$lib/components/StatusPill.svelte';
 	import YieldCurveInline from '$lib/components/YieldCurveInline.svelte';
 
 	let { data }: { data: PageData } = $props();
@@ -457,6 +460,12 @@
 		return 'text-zinc-300';
 	};
 
+	const chgDirection = (c: Change): 'up' | 'down' | 'flat' => {
+		if (c.value > 0) return 'up';
+		if (c.value < 0) return 'down';
+		return 'flat';
+	};
+
 	const headerTime = () => {
 		const d = new Date();
 		const hh = String(d.getHours()).padStart(2, '0');
@@ -616,30 +625,27 @@
 	});
 </script>
 
-<main class="min-h-screen bg-zinc-950 text-zinc-100">
+<main class="dash-page">
 	<!-- Clock & Market Status banner -->
-	<div class="border-b border-zinc-800 bg-zinc-950">
-		<div class="mx-auto max-w-[1600px] px-3 py-1">
-			<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-mono text-zinc-300">
+	<div class="clock-banner">
+		<div class="mx-auto max-w-[1600px] px-4 py-1.5">
+			<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-data text-zinc-400">
 				<div class="flex items-center gap-3">
-					<span class="text-zinc-200">NY: {nyTime}</span>
-					<span class="text-zinc-500">|</span>
-					<span>LDN: {lonTime}</span>
-					<span class="text-zinc-500">|</span>
-					<span>TKY: {tokTime}</span>
-					<span class="text-zinc-500">|</span>
-					<span>DEL: {delTime}</span>
+					<span class="text-zinc-200">NY <span class="text-zinc-500">·</span> {nyTime}</span>
+					<span class="text-zinc-600">|</span>
+					<span>LDN <span class="text-zinc-500">·</span> {lonTime}</span>
+					<span class="text-zinc-600">|</span>
+					<span>TKY <span class="text-zinc-500">·</span> {tokTime}</span>
+					<span class="text-zinc-600">|</span>
+					<span>DEL <span class="text-zinc-500">·</span> {delTime}</span>
 				</div>
 
 				<div class="ml-auto flex items-center gap-2">
 					<span
-						class={
-							'h-1.5 w-1.5 rounded-full ' +
-							(ustOpen ? 'bg-emerald-300 animate-pulse' : 'bg-rose-400/60')
-						}
+						class={'status-dot ' + (ustOpen ? 'status-dot--open' : 'status-dot--closed')}
 						aria-hidden="true"
 					></span>
-					<span class={ustOpen ? 'text-emerald-300' : 'text-rose-300'}>
+					<span class={ustOpen ? 'text-emerald-400 font-medium' : 'text-rose-400/80'}>
 						US TREASURY: {ustOpen ? 'OPEN' : 'CLOSED'}
 					</span>
 				</div>
@@ -647,53 +653,54 @@
 		</div>
 	</div>
 
-	<!-- Top summary ticker -->
-	<div class="sticky top-0 z-30 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur">
-		<div class="mx-auto max-w-[1600px] px-3 py-2">
-			<div class="relative flex items-center gap-3">
-				<div class="text-[11px] uppercase tracking-[0.22em] text-zinc-400">
-					Global Macro Dashboard
+	<!-- Sticky summary ribbon -->
+	<div class="dash-ribbon">
+		<div class="mx-auto max-w-[1600px] px-4 py-2.5">
+			<div class="relative flex items-center gap-3 min-h-[22px]">
+				<div class="dash-title">
+					<span class="dash-title-accent" aria-hidden="true"></span>
+					<span class="dash-title-text">Global Macro Dashboard</span>
 				</div>
+
 				{#if macroReleaseAlertLine}
 					<div
-						class="macro-release-alert pointer-events-none absolute left-1/2 max-w-[50vw] -translate-x-1/2 truncate text-center text-[11px] font-mono uppercase tracking-wider text-rose-400"
+						class="macro-release-alert pointer-events-none absolute left-1/2 max-w-[50vw] -translate-x-1/2 truncate text-center text-[11px] font-data uppercase tracking-wider"
 						aria-live="polite"
 					>
 						{macroReleaseAlertLine}
 					</div>
 				{/if}
-				<div class="ml-auto flex items-center gap-3 text-[11px] text-zinc-400">
-					<div class="hidden sm:block">LOCAL</div>
-					<div class="font-mono text-zinc-200">{now}</div>
-					<div class="h-3 w-px bg-zinc-800"></div>
-					<div class="font-mono text-[11px] text-zinc-400">
-						FOMC [Kalshi] {data.fedWatch.meetingDate}:
-						<span
-							class="font-mono font-bold"
-							class:text-emerald-400={data.fedWatch.action === '25bps CUT'}
-							class:text-neutral-200={data.fedWatch.action === 'HOLD'}
-							class:text-rose-400={data.fedWatch.action === '25bps HIKE'}
-						>
-							{data.fedWatch.action} ({data.fedWatch.probability})
-						</span>
+
+				<div class="ml-auto flex items-center gap-3 text-[11px]">
+					<span class="hidden sm:inline text-zinc-500 uppercase tracking-wider">Local</span>
+					<span class="font-data text-zinc-200 tabular-nums">{now}</span>
+					<div class="h-3 w-px bg-zinc-700/60"></div>
+					<div class="fomc-chip">
+						<span class="text-amber-500/80 font-semibold tracking-wide">FOMC</span>
+						<span class="text-zinc-500">[Kalshi]</span>
+						<span>{data.fedWatch.meetingDate}</span>
+						<StatusPill kind="fed" action={data.fedWatch.action} />
+						<span class="text-zinc-400">({data.fedWatch.probability})</span>
 					</div>
 				</div>
 			</div>
 
-			<div class="mt-2 ticker" aria-label="Market summary ticker">
+			<div class="ribbon-divider" aria-hidden="true"></div>
+
+			<div class="mt-2.5 ticker" aria-label="Market summary ticker">
 				<div class="tickerMask">
 					<div class="tickerTrack">
 						{#each tickerItems as r (r.symbol)}
 							<div class="tick">
 								<div class="tickSym">{r.symbol}</div>
 								<div
-									class="tickVal font-mono price-flash"
+									class="tickVal font-data price-flash"
 									class:blink-green={flashStates[r.symbol] === 'up'}
 									class:blink-red={flashStates[r.symbol] === 'down'}
 								>
 									{r.value}
 								</div>
-								<div class={"tickChg font-mono " + clsFor(r.change)}>
+								<div class={'tickChg font-data ' + clsFor(r.change)}>
 									{fmtChg(r.change)}
 								</div>
 							</div>
@@ -704,13 +711,13 @@
 							<div class="tick">
 								<div class="tickSym">{r.symbol}</div>
 								<div
-									class="tickVal font-mono price-flash"
+									class="tickVal font-data price-flash"
 									class:blink-green={flashStates[r.symbol] === 'up'}
 									class:blink-red={flashStates[r.symbol] === 'down'}
 								>
 									{r.value}
 								</div>
-								<div class={"tickChg font-mono " + clsFor(r.change)}>
+								<div class={'tickChg font-data ' + clsFor(r.change)}>
 									{fmtChg(r.change)}
 								</div>
 							</div>
@@ -723,76 +730,77 @@
 
 	<PolicyStrip centralBanks={data.centralBanks} {centralBanksSource} />
 
-	<div class="mx-auto max-w-[1600px] px-3 pb-6 pt-3">
+	<div class="mx-auto max-w-[1600px] px-4 pb-8 pt-4">
 		<div class="dashboardLayout">
 			<div class="blocksStack">
 				<div class="blocksRow blocksRowPrimary" role="region" aria-label="Primary market panels">
 					{#each primaryRow as section (section.id)}
-						{@render marketSectionPanel(section, marketsSource)}
+						<Panel title={section.title} source={marketsSource} id="{section.id}-heading">
+							{#each section.items as item (item.symbol)}
+								<QuoteRow
+									symbol={item.symbol}
+									label={item.label}
+									value={item.value}
+									changeText={fmtChg(item.change)}
+									changeDirection={chgDirection(item.change)}
+									flashUp={flashStates[item.symbol] === 'up'}
+									flashDown={flashStates[item.symbol] === 'down'}
+								/>
+							{/each}
+						</Panel>
 					{/each}
 				</div>
 
 				<div class="blocksRow blocksRowSecondary" role="region" aria-label="Secondary market panels">
-					<section
-						class="sectionPanel border border-zinc-800"
-						class:opacity-75={marketsSource === 'fallback'}
-						aria-labelledby="yield-spreads-heading"
+					<Panel
+						title="YIELD SPREADS & CRYPTO"
+						source={marketsSource}
+						id="yield-spreads-heading"
 					>
-						<div class="sectionBand">
-							<h2 id="yield-spreads-heading" class="sectionHeading">
-								YIELD SPREADS & CRYPTO{#if marketsSource === 'cache'}<span class="sourceBadge sourceBadgeCache">CACHED</span>{:else if marketsSource === 'fallback'}<span class="sourceBadge sourceBadgeStale">[STALE]</span>{/if}
-							</h2>
-						</div>
-						<div class="sectionBody">
-							<div class="tickerGrid">
-								{#each computedSpreadTickers as item (item.symbol)}
-									<div class="tickerCard border border-zinc-800">
-										<div class="tickerCardTop">
-											<span class="tickerSym">{item.symbol}</span>
-											<span class={"tickerChg font-mono " + clsFor(item.change)}>{fmtChg(item.change)}</span>
-										</div>
-										<div class="tickerLbl">{item.label}</div>
-										<div
-											class="tickerVal font-mono price-flash"
-											class:blink-green={flashStates[item.symbol] === 'up'}
-											class:blink-red={flashStates[item.symbol] === 'down'}
-										>
-											{item.value}
-										</div>
-									</div>
-								{/each}
-								<div class="tickerCard border border-zinc-800">
-									<div class="tickerCardTop">
-										<span class="tickerSym">{BITCOIN.symbol}</span>
-										<span
-											class={
-												'tickerChg font-mono ' +
-												clsFor({ mode: 'pct', value: BITCOIN.changePct })
-											}
-										>
-											{fmtSigned(BITCOIN.changePct, 2)}%
-										</span>
-									</div>
-									<div class="tickerLbl">{BITCOIN.label}</div>
-									<div
-										class="tickerVal font-mono price-flash"
-										class:blink-green={flashStates[BITCOIN.symbol] === 'up'}
-										class:blink-red={flashStates[BITCOIN.symbol] === 'down'}
-									>
-										${fmtNum(BITCOIN.currentPrice, 2)}
-									</div>
-								</div>
-							</div>
-						</div>
-					</section>
+						{#each computedSpreadTickers as item (item.symbol)}
+							<QuoteRow
+								symbol={item.symbol}
+								label={item.label}
+								value={item.value}
+								changeText={fmtChg(item.change)}
+								changeDirection={chgDirection(item.change)}
+								flashUp={flashStates[item.symbol] === 'up'}
+								flashDown={flashStates[item.symbol] === 'down'}
+							/>
+						{/each}
+						<QuoteRow
+							symbol={BITCOIN.symbol}
+							label={BITCOIN.label}
+							value={'$' + fmtNum(BITCOIN.currentPrice, 2)}
+							changeText={fmtSigned(BITCOIN.changePct, 2) + '%'}
+							changeDirection={chgDirection({ mode: 'pct', value: BITCOIN.changePct })}
+							flashUp={flashStates[BITCOIN.symbol] === 'up'}
+							flashDown={flashStates[BITCOIN.symbol] === 'down'}
+						/>
+					</Panel>
 
 					{#each secondaryRow as section (section.id)}
-						{@render marketSectionPanel(section, marketsSource)}
+						<Panel title={section.title} source={marketsSource} id="{section.id}-heading">
+							{#each section.items as item (item.symbol)}
+								<QuoteRow
+									symbol={item.symbol}
+									label={item.label}
+									value={item.value}
+									changeText={fmtChg(item.change)}
+									changeDirection={chgDirection(item.change)}
+									flashUp={flashStates[item.symbol] === 'up'}
+									flashDown={flashStates[item.symbol] === 'down'}
+								/>
+							{/each}
+						</Panel>
 					{/each}
 				</div>
 			</div>
 
-			<section class="curveMacroRow grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Yield curve and macro data">
+			<section
+				class="curveMacroRow grid grid-cols-1 gap-4 lg:grid-cols-2"
+				aria-label="Yield curve and macro data"
+			>
 				<div class="curveCol min-w-0">
 					<YieldCurveInline
 						us3mYield={US_RATES['3M'].yield}
@@ -822,65 +830,56 @@
 	</div>
 </main>
 
-{#snippet marketSectionPanel(section: MarketSection, source: DataSourceTag | undefined)}
-	<section
-		class="sectionPanel border border-zinc-800"
-		class:opacity-75={source === 'fallback'}
-		aria-labelledby="{section.id}-heading"
-	>
-		<div class="sectionBand">
-			<h2 id="{section.id}-heading" class="sectionHeading">
-				{section.title}{#if source === 'cache'}<span class="sourceBadge sourceBadgeCache">CACHED</span>{:else if source === 'fallback'}<span class="sourceBadge sourceBadgeStale">[STALE]</span>{/if}
-			</h2>
-		</div>
-		<div class="sectionBody">
-			<div class="tickerGrid">
-				{#each section.items as item (item.symbol)}
-					<div class="tickerCard border border-zinc-800">
-						<div class="tickerCardTop">
-							<span class="tickerSym">{item.symbol}</span>
-							<span class={"tickerChg font-mono " + clsFor(item.change)}>{fmtChg(item.change)}</span>
-						</div>
-						<div class="tickerLbl">{item.label}</div>
-						<div
-							class="tickerVal font-mono price-flash"
-							class:blink-green={flashStates[item.symbol] === 'up'}
-							class:blink-red={flashStates[item.symbol] === 'down'}
-						>
-							{item.value}
-						</div>
-					</div>
-				{/each}
-			</div>
-		</div>
-	</section>
-{/snippet}
-
 <style>
-	:global(html) {
-		background: #09090b;
+	.clock-banner {
+		border-bottom: 1px solid var(--color-border-subtle);
+		background: rgba(9, 9, 11, 0.6);
+	}
+
+	.status-dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 9999px;
+	}
+
+	.status-dot--open {
+		background: #6ee7b7;
+		box-shadow: 0 0 8px rgba(110, 231, 183, 0.5);
+		animation: pulse 2s ease-in-out infinite;
+	}
+
+	.status-dot--closed {
+		background: rgba(251, 113, 133, 0.55);
+	}
+
+	.ribbon-divider {
+		height: 1px;
+		margin-top: 10px;
+		background: linear-gradient(
+			90deg,
+			transparent,
+			rgba(245, 158, 11, 0.25) 20%,
+			rgba(34, 211, 238, 0.2) 80%,
+			transparent
+		);
 	}
 
 	.dashboardLayout {
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
+		gap: 10px;
 	}
 
 	.blocksStack {
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
+		gap: 10px;
 	}
 
 	.blocksRow {
 		display: grid;
-		gap: 8px;
+		gap: 10px;
 		align-items: stretch;
-		grid-template-columns: 1fr;
-	}
-
-	.blocksRowPrimary {
 		grid-template-columns: 1fr;
 	}
 
@@ -888,182 +887,29 @@
 		.blocksRowPrimary {
 			grid-template-columns: repeat(3, minmax(0, 1fr));
 		}
-	}
 
-	.blocksRowSecondary {
-		grid-template-columns: 1fr;
-	}
-
-	@media (min-width: 768px) {
 		.blocksRowSecondary {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
 	}
 
-	.sectionPanel {
-		background: rgba(24, 24, 27, 0.78);
-		display: flex;
-		flex-direction: column;
-		min-height: 0;
-	}
-
-	.sectionBand {
-		padding: 10px 10px 8px 10px;
-		border-bottom: 1px solid rgb(39 39 42);
-		background: rgba(0, 0, 0, 0.55);
-	}
-
-	.sectionHeading {
-		margin: 0;
-		font-size: 10px;
-		font-weight: 700;
-		text-transform: uppercase;
-		letter-spacing: 0.18em;
-		color: rgb(228 228 231);
-		line-height: 1.3;
-	}
-
-	.sourceBadge {
-		display: inline-block;
-		margin-left: 6px;
-		font-size: 9px;
-		font-weight: 600;
-		letter-spacing: 0.1em;
-		vertical-align: middle;
-		white-space: nowrap;
-	}
-
-	.sourceBadgeCache {
-		color: rgb(113 113 122);
-	}
-
-	.sourceBadgeStale {
-		color: rgba(244, 63, 94, 0.8);
-	}
-
-	.sectionBody {
-		padding: 6px 8px 8px 8px;
-		flex: 1;
-	}
-
-	.tickerGrid {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
-
-	.tickerCard {
-		background: rgba(24, 24, 27, 0.65);
-		padding: 6px 8px;
-		min-height: 0;
-		display: flex;
-		flex-direction: column;
-		justify-content: space-between;
-	}
-
-	.tickerCardTop {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 8px;
-	}
-
-	.tickerSym {
-		font-size: 10px;
-		letter-spacing: 0.1em;
-		color: rgb(113 113 122);
-		text-transform: uppercase;
-	}
-
-	.tickerLbl {
-		font-size: 10px;
-		color: rgb(161 161 170);
-		margin-top: 2px;
-		line-height: 1.25;
-	}
-
-	.tickerVal {
-		font-size: 12px;
-		color: rgb(250 250 250);
-		margin-top: 4px;
-		letter-spacing: 0.02em;
-	}
-
-	.price-flash {
-		display: inline-block;
-		border-radius: 2px;
-		padding: 0 2px;
-		will-change: background-color, color;
-	}
-
-	@keyframes flashGreen {
-		0% {
-			background-color: rgba(34, 197, 94, 0.4);
-			color: #22c55e;
-		}
-		100% {
-			background-color: transparent;
-			color: rgb(250 250 250);
-		}
-	}
-
-	@keyframes flashRed {
-		0% {
-			background-color: rgba(239, 68, 68, 0.4);
-			color: #ef4444;
-		}
-		100% {
-			background-color: transparent;
-			color: rgb(250 250 250);
-		}
-	}
-
-	:global(.blink-green) {
-		animation: flashGreen 0.8s ease-out;
-	}
-
-	:global(.blink-red) {
-		animation: flashRed 0.8s ease-out;
-	}
-
-	@keyframes macroReleasePulse {
-		0%,
-		100% {
-			color: #ef4444;
-			opacity: 1;
-			text-shadow: 0 0 8px rgba(239, 68, 68, 0.35);
-		}
-		50% {
-			color: #fca5a5;
-			opacity: 0.65;
-			text-shadow: none;
-		}
-	}
-
-	:global(.macro-release-alert) {
-		animation: macroReleasePulse 1.2s ease-in-out infinite;
-	}
-
 	.curveMacroRow {
 		width: 100%;
-	}
-
-	.tickerChg {
-		font-size: 11px;
-		letter-spacing: 0.02em;
-		white-space: nowrap;
+		margin-top: 2px;
 	}
 
 	.ticker {
-		border: 1px solid rgb(39 39 42);
-		background: rgba(9, 9, 11, 0.25);
+		border: 1px solid var(--color-border-subtle);
+		border-radius: 4px;
+		background: rgba(9, 9, 11, 0.35);
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 	}
 
 	.tickerMask {
 		position: relative;
 		overflow: hidden;
 		white-space: nowrap;
-		padding: 6px 6px;
+		padding: 7px 8px;
 	}
 
 	.tickerMask::before,
@@ -1072,19 +918,19 @@
 		position: absolute;
 		top: 0;
 		bottom: 0;
-		width: 28px;
+		width: 32px;
 		pointer-events: none;
 		z-index: 2;
 	}
 
 	.tickerMask::before {
 		left: 0;
-		background: linear-gradient(to right, rgba(24, 24, 27, 0.95), rgba(24, 24, 27, 0));
+		background: linear-gradient(to right, rgba(9, 9, 11, 0.95), transparent);
 	}
 
 	.tickerMask::after {
 		right: 0;
-		background: linear-gradient(to left, rgba(24, 24, 27, 0.95), rgba(24, 24, 27, 0));
+		background: linear-gradient(to left, rgba(9, 9, 11, 0.95), transparent);
 	}
 
 	.tickerTrack {
@@ -1109,9 +955,13 @@
 		}
 	}
 
-	@media (prefers-reduced-motion: reduce) {
-		.tickerTrack {
-			animation: none;
+	@keyframes pulse {
+		0%,
+		100% {
+			opacity: 1;
+		}
+		50% {
+			opacity: 0.5;
 		}
 	}
 
@@ -1119,27 +969,33 @@
 		display: inline-flex;
 		align-items: baseline;
 		gap: 8px;
-		border: 1px solid rgba(39, 39, 42, 0.9);
-		background: rgba(24, 24, 27, 0.6);
-		padding: 4px 8px;
+		border: 1px solid var(--color-border-subtle);
+		border-radius: 4px;
+		background: rgba(24, 24, 27, 0.55);
+		padding: 4px 10px;
+		transition: border-color 150ms ease;
+	}
+
+	.tick:hover {
+		border-color: rgba(245, 158, 11, 0.2);
 	}
 
 	.tickSym {
-		color: rgb(113 113 122);
+		font-family: var(--font-data);
+		color: var(--color-accent-cyan);
+		opacity: 0.75;
 		letter-spacing: 0.08em;
+		font-size: 10px;
 	}
 
 	.tickVal {
-		color: rgb(244 244 245);
+		color: var(--color-text-primary);
 		letter-spacing: 0.02em;
-	}
-
-	.tickVal.price-flash {
-		border-radius: 2px;
-		padding: 0 2px;
+		font-weight: 600;
 	}
 
 	.tickChg {
 		letter-spacing: 0.02em;
+		transition: color 150ms ease;
 	}
 </style>

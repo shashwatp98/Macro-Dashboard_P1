@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { DataSourceTag } from '$lib/types/market';
+	import Panel from './Panel.svelte';
 
 	type Props = {
 		us3mYield: number;
@@ -24,13 +25,16 @@
 	type CurvePoint = {
 		tenor: string;
 		yield: number;
+		color: string;
 	};
 
+	const TENOR_COLORS = ['#22d3ee', '#34d399', '#f59e0b', '#fb7185'];
+
 	const curve = $derived<CurvePoint[]>([
-		{ tenor: '3M', yield: us3mYield },
-		{ tenor: '2Y', yield: us2yYield },
-		{ tenor: '10Y', yield: us10yYield },
-		{ tenor: '30Y', yield: us30yYield }
+		{ tenor: '3M', yield: us3mYield, color: TENOR_COLORS[0] },
+		{ tenor: '2Y', yield: us2yYield, color: TENOR_COLORS[1] },
+		{ tenor: '10Y', yield: us10yYield, color: TENOR_COLORS[2] },
+		{ tenor: '30Y', yield: us30yYield, color: TENOR_COLORS[3] }
 	]);
 
 	const w = 720;
@@ -57,144 +61,123 @@
 			.join(' ')
 	);
 
-	const invLevel = $derived(spread2s10s * 100);
+	const areaD = $derived(
+		`${pathD} L ${xAt(curve.length - 1, curve.length).toFixed(2)} ${(h - padY).toFixed(2)} L ${xAt(0, curve.length).toFixed(2)} ${(h - padY).toFixed(2)} Z`
+	);
 
-	const clsFor = (value: number) => {
-		if (value > 0) return 'text-emerald-500';
-		if (value < 0) return 'text-rose-500';
-		return 'text-zinc-300';
-	};
+	const invLevel = $derived(spread2s10s * 100);
+	const isInverted = $derived(spread2s10s < 0);
+
+	const spread2s10sClass = $derived(
+		isInverted ? 'badgeVal--danger' : invLevel > 0 ? 'badgeVal--positive' : 'badgeVal--neutral'
+	);
 </script>
 
-<div class="widget border border-zinc-800 h-full" class:opacity-75={marketsSource === 'fallback'}>
-	<div class="widgetHeader">
-		<div class="widgetTitle">
-			Yield Curve Monitor{#if marketsSource === 'cache'}<span class="sourceBadge sourceBadgeCache">CACHED</span>{:else if marketsSource === 'fallback'}<span class="sourceBadge sourceBadgeStale">[STALE]</span>{/if}
-		</div>
-		<div class="widgetMeta">UST curve — 3M / 2Y / 10Y / 30Y</div>
-	</div>
-	<div class="widgetBody">
-		<div class="curveWrap border border-zinc-800">
-			<svg viewBox={`0 0 ${w} ${h}`} class="curveSvg" role="img" aria-label="Yield curve line chart">
-				<defs>
-					<linearGradient id="yieldCurveGradient" x1="0" y1="0" x2="1" y2="0">
-						<stop offset="0%" stop-color="rgb(16 185 129)" stop-opacity="0.45" />
-						<stop offset="55%" stop-color="rgb(52 211 153)" stop-opacity="0.5" />
-						<stop offset="100%" stop-color="rgb(244 63 94)" stop-opacity="0.55" />
-					</linearGradient>
-				</defs>
+<Panel title="Yield Curve Monitor" meta="UST curve — 3M / 2Y / 10Y / 30Y" source={marketsSource}>
+	<div class="curveWrap">
+		<svg viewBox={`0 0 ${w} ${h}`} class="curveSvg" role="img" aria-label="Yield curve line chart">
+			<defs>
+				<linearGradient id="yieldCurveGradient" x1="0" y1="0" x2="1" y2="0">
+					<stop offset="0%" stop-color="rgb(34 211 238)" stop-opacity="0.7" />
+					<stop offset="45%" stop-color="rgb(52 211 153)" stop-opacity="0.75" />
+					<stop offset="100%" stop-color="rgb(245 158 11)" stop-opacity="0.8" />
+				</linearGradient>
+				<linearGradient id="yieldAreaGradient" x1="0" y1="0" x2="0" y2="1">
+					<stop offset="0%" stop-color="rgb(34 211 238)" stop-opacity="0.12" />
+					<stop offset="100%" stop-color="rgb(34 211 238)" stop-opacity="0" />
+				</linearGradient>
+				<filter id="curveGlow" x="-20%" y="-20%" width="140%" height="140%">
+					<feGaussianBlur stdDeviation="3" result="blur" />
+					<feMerge>
+						<feMergeNode in="blur" />
+						<feMergeNode in="SourceGraphic" />
+					</feMerge>
+				</filter>
+			</defs>
 
-				{#each Array.from({ length: 6 }) as _, i (i)}
-					<line
-						x1={padX}
-						y1={padY + (i * (h - padY * 2)) / 5}
-						x2={w - padX}
-						y2={padY + (i * (h - padY * 2)) / 5}
-						class="curveGrid"
-					/>
-				{/each}
-
-				<path
-					d={pathD}
-					fill="none"
-					stroke="url(#yieldCurveGradient)"
-					stroke-width="2.2"
-					stroke-linecap="round"
+			{#each Array.from({ length: 6 }) as _, i (i)}
+				<line
+					x1={padX}
+					y1={padY + (i * (h - padY * 2)) / 5}
+					x2={w - padX}
+					y2={padY + (i * (h - padY * 2)) / 5}
+					class="curveGrid"
 				/>
+			{/each}
 
-				{#each curve as p, i (p.tenor)}
-					<circle
-						cx={xAt(i, curve.length)}
-						cy={yAt(p.yield, minY, rangeY)}
-						r="2.4"
-						class="curvePt"
-					/>
-				{/each}
-			</svg>
+			<path d={areaD} fill="url(#yieldAreaGradient)" />
 
-			<div class="tenors">
-				{#each curve as p (p.tenor)}
-					<div class="tenor font-mono">{p.tenor}</div>
-				{/each}
-			</div>
-		</div>
+			<path
+				d={pathD}
+				fill="none"
+				stroke="url(#yieldCurveGradient)"
+				stroke-width="2.5"
+				stroke-linecap="round"
+				stroke-linejoin="round"
+				filter="url(#curveGlow)"
+				opacity="0.95"
+			/>
 
-		<div class="mt-3 grid grid-cols-2 gap-2">
-			{#each curve as p (p.tenor + '-kpi')}
-				<div class="miniKpi border border-zinc-800">
-					<div class="k">{p.tenor}</div>
-					<div class="v font-mono">{p.yield.toFixed(2)}%</div>
+			{#each curve as p, i (p.tenor)}
+				<circle
+					cx={xAt(i, curve.length)}
+					cy={yAt(p.yield, minY, rangeY)}
+					r="4"
+					fill={p.color}
+					stroke="rgba(9,9,11,0.8)"
+					stroke-width="1.5"
+				/>
+			{/each}
+		</svg>
+
+		<div class="tenors">
+			{#each curve as p (p.tenor)}
+				<div class="tenor">
+					<span class="tenorDot" style:background={p.color}></span>
+					<span class="tenorLabel font-data">{p.tenor}</span>
 				</div>
 			{/each}
 		</div>
+	</div>
 
-		<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
-			<div class="badge border border-zinc-800">
-				<span class="bKey">2s10s</span>
-				<span class={'bVal font-mono ' + clsFor(invLevel)}>
-					{invLevel.toFixed(1)}bp
-				</span>
+	<div class="miniKpiGrid">
+		{#each curve as p (p.tenor + '-kpi')}
+			<div class="miniKpi">
+				<div class="miniKpiHead">
+					<span class="tenorDot" style:background={p.color}></span>
+					<span class="miniKpiKey">{p.tenor}</span>
+				</div>
+				<div class="miniKpiVal font-data">{p.yield.toFixed(2)}%</div>
 			</div>
-			<div class="badge border border-zinc-800">
-				<span class="bKey">RANGE</span>
-				<span class="bVal font-mono">{minY.toFixed(2)}–{maxY.toFixed(2)}%</span>
-			</div>
+		{/each}
+	</div>
+
+	<div class="badgeRow">
+		<div class="statBadge">
+			<span class="badgeKey">2s10s</span>
+			<span class="badgeVal font-data {spread2s10sClass}">
+				{invLevel.toFixed(1)}bp
+				{#if isInverted}
+					<span class="invertedTag">INV</span>
+				{/if}
+			</span>
+		</div>
+		<div class="statBadge">
+			<span class="badgeKey">Range</span>
+			<span class="badgeVal font-data badgeVal--neutral"
+				>{minY.toFixed(2)}–{maxY.toFixed(2)}%</span
+			>
 		</div>
 	</div>
-</div>
+</Panel>
 
 <style>
-	.widget {
-		background: rgba(24, 24, 27, 0.78);
-	}
-
-	.widgetHeader {
-		display: flex;
-		align-items: baseline;
-		gap: 10px;
-		padding: 10px 10px 8px 10px;
-		border-bottom: 1px solid rgb(39 39 42);
-		background: rgba(9, 9, 11, 0.35);
-	}
-
-	.widgetTitle {
-		font-size: 11px;
-		text-transform: uppercase;
-		letter-spacing: 0.22em;
-		color: rgb(212 212 216);
-	}
-
-	.widgetMeta {
-		font-size: 11px;
-		color: rgb(113 113 122);
-	}
-
-	.widgetBody {
-		padding: 8px 10px 10px 10px;
-	}
-
-	.miniKpi {
-		background: rgba(9, 9, 11, 0.22);
-		padding: 8px 10px;
-	}
-
-	.miniKpi .k {
-		font-size: 10px;
-		letter-spacing: 0.22em;
-		text-transform: uppercase;
-		color: rgb(113 113 122);
-	}
-
-	.miniKpi .v {
-		margin-top: 4px;
-		font-size: 13px;
-		color: rgb(244 244 245);
-		letter-spacing: 0.02em;
-	}
-
 	.curveWrap {
-		background: rgba(9, 9, 11, 0.2);
-		padding: 10px 10px 8px 10px;
+		background: rgba(9, 9, 11, 0.35);
+		border: 1px solid var(--color-border-subtle);
+		border-radius: 4px;
+		padding: 12px 12px 8px;
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
 	}
 
 	.curveSvg {
@@ -204,67 +187,128 @@
 	}
 
 	.curveGrid {
-		stroke: rgba(39, 39, 42, 0.65);
+		stroke: rgba(63, 63, 70, 0.45);
 		stroke-width: 1;
 		shape-rendering: crispEdges;
-	}
-
-	.curvePt {
-		fill: rgb(244 244 245);
-		opacity: 0.85;
 	}
 
 	.tenors {
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
 		gap: 6px;
-		margin-top: 8px;
+		margin-top: 10px;
 	}
 
 	.tenor {
-		text-align: center;
-		font-size: 10px;
-		color: rgb(161 161 170);
-		letter-spacing: 0.08em;
-		border-top: 1px solid rgba(39, 39, 42, 0.7);
-		padding-top: 6px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 5px;
+		padding-top: 8px;
+		border-top: 1px solid rgba(63, 63, 70, 0.5);
 	}
 
-	.badge {
+	.tenorDot {
+		width: 6px;
+		height: 6px;
+		border-radius: 9999px;
+		flex-shrink: 0;
+	}
+
+	.tenorLabel {
+		font-size: 10px;
+		color: var(--color-text-secondary);
+		letter-spacing: 0.08em;
+	}
+
+	.miniKpiGrid {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 8px;
+		margin-top: 12px;
+	}
+
+	.miniKpi {
+		background: rgba(9, 9, 11, 0.3);
+		border: 1px solid var(--color-border-subtle);
+		border-radius: 4px;
+		padding: 8px 10px;
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+		transition: border-color 150ms ease;
+	}
+
+	.miniKpi:hover {
+		border-color: rgba(34, 211, 238, 0.2);
+	}
+
+	.miniKpiHead {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.miniKpiKey {
+		font-size: 10px;
+		letter-spacing: 0.18em;
+		text-transform: uppercase;
+		color: var(--color-text-muted);
+	}
+
+	.miniKpiVal {
+		margin-top: 4px;
+		font-size: 14px;
+		font-weight: 600;
+		color: var(--color-text-primary);
+	}
+
+	.badgeRow {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+		margin-top: 10px;
+	}
+
+	.statBadge {
 		display: inline-flex;
 		align-items: center;
 		gap: 8px;
-		background: rgba(24, 24, 27, 0.5);
-		padding: 4px 8px;
+		background: rgba(24, 24, 27, 0.55);
+		border: 1px solid var(--color-border-subtle);
+		border-radius: 4px;
+		padding: 5px 10px;
 	}
 
-	.bKey {
+	.badgeKey {
 		font-size: 10px;
-		letter-spacing: 0.22em;
+		letter-spacing: 0.18em;
 		text-transform: uppercase;
-		color: rgb(113 113 122);
+		color: var(--color-text-muted);
 	}
 
-	.bVal {
+	.badgeVal {
 		font-size: 11px;
-		color: rgb(212 212 216);
-	}
-
-	.sourceBadge {
-		display: inline-block;
-		margin-left: 6px;
-		font-size: 9px;
 		font-weight: 600;
-		letter-spacing: 0.1em;
-		vertical-align: middle;
-		white-space: nowrap;
+		transition: color 150ms ease;
 	}
 
-	.sourceBadgeCache {
-		color: rgb(113 113 122);
+	.badgeVal--positive {
+		color: #34d399;
 	}
 
-	.sourceBadgeStale {
-		color: rgba(244, 63, 94, 0.8);
+	.badgeVal--danger {
+		color: #fb7185;
+	}
+
+	.badgeVal--neutral {
+		color: #d4d4d8;
+	}
+
+	.invertedTag {
+		margin-left: 4px;
+		font-size: 9px;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		color: #fb7185;
+		opacity: 0.85;
 	}
 </style>
