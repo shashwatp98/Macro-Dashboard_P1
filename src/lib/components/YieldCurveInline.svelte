@@ -164,9 +164,7 @@
 		</div>
 		<div class="statBadge">
 			<span class="badgeKey">Range</span>
-			<span class="badgeVal font-data badgeVal--neutral"
-				>{minY.toFixed(2)}–{maxY.toFixed(2)}%</span
-			>
+			<span class="badgeVal badgeVal--neutral font-data">{minY.toFixed(2)}–{maxY.toFixed(2)}%</span>
 		</div>
 	</div>
 </Panel>

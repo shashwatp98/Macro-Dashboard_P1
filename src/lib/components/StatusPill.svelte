@@ -5,7 +5,12 @@
 
 	type Props =
 		| { kind: 'fed'; action: FedAction }
-		| { kind: 'macro'; status: MacroStatus | null | undefined; flashUp?: boolean; flashDown?: boolean };
+		| {
+				kind: 'macro';
+				status: MacroStatus | null | undefined;
+				flashUp?: boolean;
+				flashDown?: boolean;
+		  };
 
 	let props: Props = $props();
 

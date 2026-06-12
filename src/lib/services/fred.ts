@@ -1,6 +1,10 @@
 import { env } from '$env/dynamic/private';
+import { getMacroForecast } from '$lib/config/macro-forecasts';
 import { FETCH_TIMEOUT_MS } from '$lib/services/constants';
-import type { MacroBlock, MacroBlocksBundle, MacroPayloadKey, MacroStatus } from '$lib/types/market';
+import type { MacroBlock, MacroBlocksBundle, MacroPayloadKey } from '$lib/types/market';
+import { evaluateMacroStatus } from './macroStatus';
+
+export { evaluateMacroStatus } from './macroStatus';
 
 const FRED_OBSERVATIONS_BASE = 'https://api.stlouisfed.org/fred/series/observations';
 const FRED_API_BASE = 'https://api.stlouisfed.org/fred';
@@ -13,16 +17,15 @@ type FredMacroKind = 'yoy' | 'nfp_net' | 'spot' | 'gdp_qoq';
 type FredMacroSeriesConfig = {
 	seriesId: string;
 	kind: FredMacroKind;
-	forecast: number;
 };
 
 const FRED_MACRO_SERIES: Record<MacroPayloadKey, FredMacroSeriesConfig> = {
-	uscpi: { seriesId: 'CPIAUCSL', kind: 'yoy', forecast: 3.5 },
-	uscpicore: { seriesId: 'CPILFESL', kind: 'yoy', forecast: 2.6 },
-	uspce: { seriesId: 'PCEPILFE', kind: 'yoy', forecast: 3.2 },
-	usnfp: { seriesId: 'PAYEMS', kind: 'nfp_net', forecast: 165 },
-	usur: { seriesId: 'UNRATE', kind: 'spot', forecast: 4.2 },
-	usgdp: { seriesId: 'GDPC1', kind: 'gdp_qoq', forecast: 2.8 }
+	uscpi: { seriesId: 'CPIAUCSL', kind: 'yoy' },
+	uscpicore: { seriesId: 'CPILFESL', kind: 'yoy' },
+	uspce: { seriesId: 'PCEPILFE', kind: 'yoy' },
+	usnfp: { seriesId: 'PAYEMS', kind: 'nfp_net' },
+	usur: { seriesId: 'UNRATE', kind: 'spot' },
+	usgdp: { seriesId: 'GDPC1', kind: 'gdp_qoq' }
 };
 
 /** Official 2026 institutional baselines — authoritative dashboard prints. */
@@ -93,22 +96,6 @@ const fredReleaseIdCache = new Map<string, number>();
 const roundMacroRate = (value: number, decimals = 2): number => {
 	const factor = 10 ** decimals;
 	return Math.round(value * factor) / factor;
-};
-
-const evaluateMacroStatus = (
-	key: MacroPayloadKey,
-	actual: number,
-	forecast: number
-): MacroStatus => {
-	if (actual === forecast) {
-		return 'INLINE';
-	}
-
-	if (key === 'usnfp' || key === 'usgdp') {
-		return actual > forecast ? 'EXP. BEAT' : 'MISS';
-	}
-
-	return actual > forecast ? 'HOT BEAT' : 'COOL MISS';
 };
 
 const buildMacroBlock = (
@@ -249,10 +236,7 @@ const buildObsValueMap = (obs: FredRawObservation[]): Map<string, number> => {
 	return byDate;
 };
 
-const metricSeriesFromObs = (
-	kind: FredMacroKind,
-	obs: FredRawObservation[]
-): number[] | null => {
+const metricSeriesFromObs = (kind: FredMacroKind, obs: FredRawObservation[]): number[] | null => {
 	if (obs.length < 2) {
 		return null;
 	}
@@ -268,7 +252,7 @@ const metricSeriesFromObs = (
 					continue;
 				}
 				const current = parseFloat(row.value);
-				metrics.push(roundMacroRate(((current / yearAgo) - 1) * 100));
+				metrics.push(roundMacroRate((current / yearAgo - 1) * 100));
 			}
 			return metrics.length >= 2 ? metrics : null;
 		}
@@ -321,7 +305,7 @@ const buildMacroBlockFromObs = (
 	const price = parseFloat(String(metrics[0]));
 	const changeFromPrior = parseFloat(String(metrics[0] - metrics[1]));
 
-	return buildMacroBlock(key, price, changeFromPrior, config.forecast);
+	return buildMacroBlock(key, price, changeFromPrior, getMacroForecast(key));
 };
 
 /** Dual-pipeline FRED macro fetch — JSON API when keyed, public CSV graph otherwise. */

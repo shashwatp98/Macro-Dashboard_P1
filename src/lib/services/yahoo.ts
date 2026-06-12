@@ -1,5 +1,7 @@
 import { FETCH_TIMEOUT_MS } from '$lib/services/constants';
-import type { DataSourceTag, LiveAbsLevel, LiveQuote, YieldSpreadPayload } from '$lib/types/market';
+import type { DataSourceTag, LiveQuote, YieldSpreadPayload } from '$lib/types/market';
+
+export { computeYieldSpreads } from './yieldSpreads';
 
 export const YAHOO_BATCH_SYMBOLS = [
 	'BTC-USD',
@@ -47,7 +49,18 @@ type YahooChartResponse = {
 
 const YAHOO_SYMBOL_TO_KEY: Record<
 	string,
-	'spx' | 'ndx' | 'dji' | 'ftse' | 'nse' | 'csi' | 'gold' | 'silver' | 'crude' | 'dxy' | 'usdjpy' | 'usdinr'
+	| 'spx'
+	| 'ndx'
+	| 'dji'
+	| 'ftse'
+	| 'nse'
+	| 'csi'
+	| 'gold'
+	| 'silver'
+	| 'crude'
+	| 'dxy'
+	| 'usdjpy'
+	| 'usdinr'
 > = {
 	'^GSPC': 'spx',
 	'^NDX': 'ndx',
@@ -245,29 +258,4 @@ const mergeYahooChartResults = (chartResults: YahooChartResult[]): YahooMarketDa
 export const fetchYahooMarketData = async (): Promise<YahooMarketData> => {
 	const chartResults = await loadYahooChartResults();
 	return mergeYahooChartResults(chartResults);
-};
-
-/** 2s10s and 10s30s from Yahoo 10Y/30Y and TradingView 2Y. */
-export const computeYieldSpreads = (
-	us2y: LiveQuote,
-	us10y: LiveQuote,
-	us30y: LiveQuote
-): Pick<YieldSpreadPayload, 'spread2s10s' | 'spread10s30s'> => {
-	const spread2s10s = us10y.price - us2y.price;
-	const spread10s30s = us30y.price - us10y.price;
-
-	const us10yAbs = us10y.changeAbs ?? 0;
-	const us30yAbs = us30y.changeAbs ?? 0;
-	const us2yAbs = us2y.changeAbs ?? 0;
-
-	return {
-		spread2s10s: {
-			price: spread2s10s,
-			change: us10yAbs - us2yAbs
-		} as LiveAbsLevel,
-		spread10s30s: {
-			price: spread10s30s,
-			change: us30yAbs - us10yAbs
-		} as LiveAbsLevel
-	};
 };

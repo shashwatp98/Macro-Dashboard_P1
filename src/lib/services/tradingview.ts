@@ -31,10 +31,7 @@ const CB_SYMBOL_SUFFIX_TO_KEY: Record<
 	AUINTR: 'au'
 };
 
-const TV_TICKER_TO_KEY: Record<
-	string,
-	'us3m' | 'us2y' | 'effr' | 'de10y' | 'jp10y' | 'au10y'
-> = {
+const TV_TICKER_TO_KEY: Record<string, 'us3m' | 'us2y' | 'effr' | 'de10y' | 'jp10y' | 'au10y'> = {
 	'TVC:US03M': 'us3m',
 	'FX_IDC:US02Y': 'us2y',
 	'TVC:US02Y': 'us2y',
@@ -83,7 +80,15 @@ type TvWidgetQuotesResponse = {
 	}>;
 };
 
-const CENTRAL_BANK_KEYS = ['us', 'eu', 'in', 'jp', 'ca', 'gb', 'au'] as const satisfies readonly (keyof CentralBanks)[];
+const CENTRAL_BANK_KEYS = [
+	'us',
+	'eu',
+	'in',
+	'jp',
+	'ca',
+	'gb',
+	'au'
+] as const satisfies readonly (keyof CentralBanks)[];
 
 export const FALLBACK_CENTRAL_BANKS: CentralBanks = {
 	us: '3.75',
@@ -119,7 +124,12 @@ const extractLivePolicyRate = (value: number | TvWidgetQuoteValues | undefined):
 
 	for (const field of ['lp', 'bid', 'ask'] as const) {
 		const candidate = value[field];
-		if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0 && candidate <= 30) {
+		if (
+			typeof candidate === 'number' &&
+			Number.isFinite(candidate) &&
+			candidate >= 0 &&
+			candidate <= 30
+		) {
 			return candidate;
 		}
 	}

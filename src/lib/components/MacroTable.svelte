@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { MacroBlock, MacroStatus, DataSourceTag } from '$lib/types/market';
+	import { MACRO_FORECASTS_UPDATED } from '$lib/config/macro-forecasts';
 	import Panel from './Panel.svelte';
 	import StatusPill from './StatusPill.svelte';
 
@@ -39,10 +40,28 @@
 
 	const MACRO_ROWS: MacroRowDef[] = [
 		{ key: 'uscpi', label: 'US CPI', sub: 'YoY', kind: 'pct', outFlashKey: 'MACRO_CPI_OUT' },
-		{ key: 'uscpicore', label: 'Core CPI', sub: 'YoY', kind: 'pct', outFlashKey: 'MACRO_CORE_CPI_OUT' },
+		{
+			key: 'uscpicore',
+			label: 'Core CPI',
+			sub: 'YoY',
+			kind: 'pct',
+			outFlashKey: 'MACRO_CORE_CPI_OUT'
+		},
 		{ key: 'uspce', label: 'Core PCE', sub: 'YoY', kind: 'pct', outFlashKey: 'MACRO_PCE_OUT' },
-		{ key: 'usnfp', label: 'Nonfarm Payrolls', sub: 'Net Monthly Change', kind: 'jobs', outFlashKey: 'MACRO_NFP_OUT' },
-		{ key: 'usur', label: 'Unemployment Rate', sub: 'Spot Rate', kind: 'pct', outFlashKey: 'MACRO_UR_OUT' },
+		{
+			key: 'usnfp',
+			label: 'Nonfarm Payrolls',
+			sub: 'Net Monthly Change',
+			kind: 'jobs',
+			outFlashKey: 'MACRO_NFP_OUT'
+		},
+		{
+			key: 'usur',
+			label: 'Unemployment Rate',
+			sub: 'Spot Rate',
+			kind: 'pct',
+			outFlashKey: 'MACRO_UR_OUT'
+		},
 		{ key: 'usgdp', label: 'GDP', sub: 'QoQ Ann.', kind: 'pct', outFlashKey: 'MACRO_GDP_OUT' }
 	];
 
@@ -98,7 +117,7 @@
 
 <Panel
 	title="US Macro Data Blocks"
-	meta="Actual vs consensus — FRED prints"
+	meta="Actual vs manual consensus — FRED prints (forecasts updated {MACRO_FORECASTS_UPDATED})"
 	source={macroSource}
 	id="macro-table-heading"
 >
@@ -108,27 +127,27 @@
 				<tr>
 					<th
 						scope="col"
-						class="w-[30%] p-3 text-left text-[9px] font-bold uppercase tracking-[0.14em] text-neutral-500"
+						class="w-[30%] p-3 text-left text-[9px] font-bold tracking-[0.14em] text-neutral-500 uppercase"
 						>INDICATOR</th
 					>
 					<th
 						scope="col"
-						class="w-[15%] p-3 text-right text-[9px] font-bold uppercase tracking-[0.14em] text-neutral-500"
+						class="w-[15%] p-3 text-right text-[9px] font-bold tracking-[0.14em] text-neutral-500 uppercase"
 						>ACTUAL</th
 					>
 					<th
 						scope="col"
-						class="w-[20%] p-3 text-right text-[9px] font-bold uppercase tracking-[0.14em] text-neutral-500"
+						class="w-[20%] p-3 text-right text-[9px] font-bold tracking-[0.14em] text-neutral-500 uppercase"
 						>Δ VS PRIOR</th
 					>
 					<th
 						scope="col"
-						class="w-[15%] p-3 text-right text-[9px] font-bold uppercase tracking-[0.14em] text-neutral-500"
+						class="w-[15%] p-3 text-right text-[9px] font-bold tracking-[0.14em] text-neutral-500 uppercase"
 						>FORECAST</th
 					>
 					<th
 						scope="col"
-						class="w-[20%] p-3 text-right text-[9px] font-bold uppercase tracking-[0.08em] text-neutral-500"
+						class="w-[20%] p-3 text-right text-[9px] font-bold tracking-[0.08em] text-neutral-500 uppercase"
 						>OUTCOME</th
 					>
 				</tr>
@@ -141,7 +160,7 @@
 						<td class="p-3 text-left font-medium">
 							{row.label}<br /><span class="text-xs text-neutral-500">{row.sub}</span>
 						</td>
-						<td class="p-3 text-right font-data actual-cell">
+						<td class="actual-cell p-3 text-right font-data">
 							{formatActual(block, row.kind)}
 						</td>
 						<td class="p-3 text-right font-data text-neutral-400">

@@ -4,6 +4,8 @@ export type DataSources = {
 	markets: DataSourceTag;
 	macro: DataSourceTag;
 	centralBanks: DataSourceTag;
+	fedWatch: DataSourceTag;
+	releaseAlerts: DataSourceTag;
 };
 
 export type LiveQuote = {

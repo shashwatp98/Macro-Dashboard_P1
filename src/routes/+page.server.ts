@@ -1,5 +1,17 @@
 import { FETCH_TIMEOUT_MS } from '$lib/services/constants';
 import {
+	classifyKalshiMarket,
+	pickDominantKalshiAction,
+	type KalshiBucketTotals
+} from '$lib/services/kalshi';
+import {
+	createCircuitState,
+	isCircuitOpen,
+	recordCircuitFailure,
+	recordCircuitSuccess
+} from '$lib/server/circuitBreaker';
+import { isDebugLoad, warnMissingFredKey } from '$lib/server/env';
+import {
 	fetchFredMacroData,
 	fetchFredMacroReleaseSchedules,
 	OFFICIAL_MACRO_2026,
@@ -11,7 +23,11 @@ import {
 	fetchTradingViewScan,
 	validateCentralBanks
 } from '$lib/services/tradingview';
-import { computeYieldSpreads, fetchYahooMarketData, type YahooMarketData } from '$lib/services/yahoo';
+import {
+	computeYieldSpreads,
+	fetchYahooMarketData,
+	type YahooMarketData
+} from '$lib/services/yahoo';
 import type {
 	CentralBanks,
 	DataSourceTag,
@@ -96,6 +112,10 @@ let macroBlocksCache: TieredCacheEntry<MacroBlocksBundle> | null = null;
 let fedWatchCache: TieredCacheEntry<FedWatch> | null = null;
 let yahooMarketCache: TieredCacheEntry<YahooMarketData> | null = null;
 let tradingViewScanCache: TieredCacheEntry<TradingViewScanData> | null = null;
+
+const yahooCircuit = createCircuitState();
+const tvScanCircuit = createCircuitState();
+let macroReleaseScheduleSource: DataSourceTag = 'fallback';
 
 type TrackResult<T> = {
 	data: T;
@@ -218,22 +238,7 @@ const parseKalshiProbability = (market: KalshiMarket): number => {
 	return 0;
 };
 
-const classifyKalshiMarket = (market: KalshiMarket): 'HOLD' | 'CUT' | 'HIKE' | null => {
-	const label = (market.yes_sub_title ?? market.subtitle ?? '').toLowerCase();
-	if (!label) {
-		return null;
-	}
-	if (label.includes('maintain') || label.includes('hold') || label.includes('0bps')) {
-		return 'HOLD';
-	}
-	if (label.includes('cut')) {
-		return 'CUT';
-	}
-	if (label.includes('hike')) {
-		return 'HIKE';
-	}
-	return null;
-};
+const classifyKalshiMarketFromApi = classifyKalshiMarket;
 
 const fetchKalshiFedWatch = async (decisionIso: string): Promise<FedWatch> => {
 	const eventTicker = toKalshiEventTicker(decisionIso);
@@ -250,14 +255,14 @@ const fetchKalshiFedWatch = async (decisionIso: string): Promise<FedWatch> => {
 	const json = (await response.json()) as KalshiMarketsResponse;
 	const markets = (json.markets ?? []).filter((market) => market.status !== 'closed');
 
-	const buckets: Record<'HOLD' | 'CUT' | 'HIKE', number> = {
+	const buckets: KalshiBucketTotals = {
 		HOLD: 0,
 		CUT: 0,
 		HIKE: 0
 	};
 
 	for (const market of markets) {
-		const bucket = classifyKalshiMarket(market);
+		const bucket = classifyKalshiMarketFromApi(market);
 		if (!bucket) {
 			continue;
 		}
@@ -272,14 +277,9 @@ const fetchKalshiFedWatch = async (decisionIso: string): Promise<FedWatch> => {
 
 	let action: FedWatchAction = 'HOLD';
 	let probability = buckets.HOLD;
-	if (buckets.CUT > probability) {
-		action = '25bps CUT';
-		probability = buckets.CUT;
-	}
-	if (buckets.HIKE > probability) {
-		action = '25bps HIKE';
-		probability = buckets.HIKE;
-	}
+	const dominant = pickDominantKalshiAction(buckets);
+	action = dominant.action;
+	probability = dominant.probability;
 
 	return {
 		meetingDate,
@@ -293,22 +293,28 @@ const buildFedWatchSnapshot = async (): Promise<FedWatch> => {
 	return fetchKalshiFedWatch(decisionDate);
 };
 
-const loadFedWatchTiered = async (): Promise<FedWatch> => {
+const loadFedWatchTiered = async (): Promise<TrackResult<FedWatch>> => {
 	if (isTieredCacheFresh(fedWatchCache, FED_WATCH_CACHE_TTL_MS)) {
-		return fedWatchCache.data;
+		return { data: fedWatchCache.data, source: 'cache' };
 	}
 
 	try {
 		const fedWatch = await buildFedWatchSnapshot();
 		fedWatchCache = { at: Date.now(), data: fedWatch };
-		return fedWatch;
+		return { data: fedWatch, source: 'live' };
 	} catch (error) {
 		if (fedWatchCache) {
 			console.warn('Kalshi Fed Watch fetch failed — serving cached snapshot:', error);
-			return fedWatchCache.data;
+			return { data: fedWatchCache.data, source: 'cache' };
 		}
 		console.error('Kalshi Fed Watch fetch failed:', error);
-		return { ...FALLBACK_FED_WATCH, meetingDate: formatFomcMeetingDate(getNextFomcDecisionDate()) };
+		return {
+			data: {
+				...FALLBACK_FED_WATCH,
+				meetingDate: formatFomcMeetingDate(getNextFomcDecisionDate())
+			},
+			source: 'fallback'
+		};
 	}
 };
 
@@ -331,8 +337,10 @@ const isFredReleaseWindow = (date = new Date()): boolean => {
 	return minutes >= RELEASE_WINDOW_START_MIN && minutes <= RELEASE_WINDOW_END_MIN;
 };
 
-const isTieredCacheFresh = <T>(cache: TieredCacheEntry<T> | null, ttlMs: number): cache is TieredCacheEntry<T> =>
-	cache !== null && Date.now() - cache.at < ttlMs;
+const isTieredCacheFresh = <T>(
+	cache: TieredCacheEntry<T> | null,
+	ttlMs: number
+): cache is TieredCacheEntry<T> => cache !== null && Date.now() - cache.at < ttlMs;
 
 const MACRO_RELEASE_DATES_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const MACRO_RELEASE_LOOKAHEAD_MS = 24 * 60 * 60 * 1000;
@@ -460,27 +468,33 @@ const buildFallbackMacroReleaseSchedules = (todayEt: string): MacroReleaseGroupS
 	return schedules;
 };
 
-const loadMacroReleaseSchedules = async (): Promise<MacroReleaseGroupSchedule[]> => {
+const loadMacroReleaseSchedules = async (): Promise<TrackResult<MacroReleaseGroupSchedule[]>> => {
 	if (isTieredCacheFresh(macroReleaseDatesCache, MACRO_RELEASE_DATES_CACHE_TTL_MS)) {
-		return macroReleaseDatesCache.data;
+		return { data: macroReleaseDatesCache.data, source: macroReleaseScheduleSource };
 	}
 
 	const todayEt = getTodayEtIsoDate();
 	let schedules: MacroReleaseGroupSchedule[];
+	let source: DataSourceTag;
 
 	try {
 		schedules = await fetchFredMacroReleaseSchedules(todayEt, MACRO_RELEASE_GROUPS);
+		source = 'live';
 	} catch (error) {
 		console.warn('FRED macro release dates fetch failed — using fallback calendar:', error);
 		schedules = buildFallbackMacroReleaseSchedules(todayEt);
+		source = 'fallback';
 	}
 
 	macroReleaseDatesCache = { at: Date.now(), data: schedules };
-	return schedules;
+	macroReleaseScheduleSource = source;
+	return { data: schedules, source };
 };
 
-const buildMacroReleaseAlerts = async (now = new Date()): Promise<MacroReleaseAlert[]> => {
-	const schedules = await loadMacroReleaseSchedules();
+const buildMacroReleaseAlertsFromSchedules = (
+	schedules: MacroReleaseGroupSchedule[],
+	now = new Date()
+): MacroReleaseAlert[] => {
 	const nowMs = now.getTime();
 	const windowEndMs = nowMs + MACRO_RELEASE_LOOKAHEAD_MS;
 	const alertsByReleaseAt = new Map<string, MacroReleaseAlert>();
@@ -510,12 +524,18 @@ const buildMacroReleaseAlerts = async (now = new Date()): Promise<MacroReleaseAl
 		.sort((a, b) => Date.parse(a.releaseAt) - Date.parse(b.releaseAt));
 };
 
-const loadMacroReleaseAlerts = async (): Promise<MacroReleaseAlert[]> => {
+const buildMacroReleaseAlerts = async (now = new Date()): Promise<MacroReleaseAlert[]> => {
+	const { data: schedules } = await loadMacroReleaseSchedules();
+	return buildMacroReleaseAlertsFromSchedules(schedules, now);
+};
+
+const loadMacroReleaseAlerts = async (): Promise<TrackResult<MacroReleaseAlert[]>> => {
 	try {
-		return await buildMacroReleaseAlerts();
+		const { data: schedules, source } = await loadMacroReleaseSchedules();
+		return { data: buildMacroReleaseAlertsFromSchedules(schedules), source };
 	} catch (error) {
 		console.error('Macro release alert build failed:', error);
-		return [];
+		return { data: [], source: 'fallback' };
 	}
 };
 
@@ -570,11 +590,22 @@ const loadFredMacroBlocksTiered = async (): Promise<TrackResult<MacroBlocksBundl
 };
 
 const loadYahooMarketTrack = async (): Promise<TrackResult<YahooMarketData>> => {
+	if (isCircuitOpen(yahooCircuit)) {
+		if (isTieredCacheFresh(yahooMarketCache, FAST_TRACK_CACHE_TTL_MS)) {
+			console.warn('Yahoo circuit open — serving fast-track cache');
+			return { data: yahooMarketCache.data, source: 'cache' };
+		}
+		console.warn('Yahoo circuit open — no fresh cache available');
+		return { data: {}, source: 'fallback' };
+	}
+
 	try {
 		const data = await fetchYahooMarketData();
 		yahooMarketCache = { at: Date.now(), data };
+		recordCircuitSuccess(yahooCircuit);
 		return { data, source: 'live' };
 	} catch (error) {
+		recordCircuitFailure(yahooCircuit);
 		if (isTieredCacheFresh(yahooMarketCache, FAST_TRACK_CACHE_TTL_MS)) {
 			console.warn('Yahoo Fetch Failed — serving fast-track cache:', error);
 			return { data: yahooMarketCache.data, source: 'cache' };
@@ -585,11 +616,22 @@ const loadYahooMarketTrack = async (): Promise<TrackResult<YahooMarketData>> => 
 };
 
 const loadTradingViewScanTrack = async (): Promise<TrackResult<TradingViewScanData>> => {
+	if (isCircuitOpen(tvScanCircuit)) {
+		if (isTieredCacheFresh(tradingViewScanCache, FAST_TRACK_CACHE_TTL_MS)) {
+			console.warn('TradingView circuit open — serving fast-track cache');
+			return { data: tradingViewScanCache.data, source: 'cache' };
+		}
+		console.warn('TradingView circuit open — no fresh cache available');
+		return { data: {}, source: 'fallback' };
+	}
+
 	try {
 		const data = await fetchTradingViewScan();
 		tradingViewScanCache = { at: Date.now(), data };
+		recordCircuitSuccess(tvScanCircuit);
 		return { data, source: 'live' };
 	} catch (error) {
+		recordCircuitFailure(tvScanCircuit);
 		if (isTieredCacheFresh(tradingViewScanCache, FAST_TRACK_CACHE_TTL_MS)) {
 			console.warn('TradingView Scanner Fetch Failed — serving fast-track cache:', error);
 			return { data: tradingViewScanCache.data, source: 'cache' };
@@ -599,7 +641,10 @@ const loadTradingViewScanTrack = async (): Promise<TrackResult<TradingViewScanDa
 	}
 };
 
-const combineMarketsSource = (yahooSource: DataSourceTag, tvSource: DataSourceTag): DataSourceTag => {
+const combineMarketsSource = (
+	yahooSource: DataSourceTag,
+	tvSource: DataSourceTag
+): DataSourceTag => {
 	if (yahooSource === 'fallback' || tvSource === 'fallback') {
 		return 'fallback';
 	}
@@ -672,13 +717,16 @@ const FALLBACK: MarketLivePayload = {
 };
 
 export const load: PageServerLoad = async ({ setHeaders }) => {
+	warnMissingFredKey();
+
 	setHeaders({
 		'cache-control': 'no-store, no-cache, must-revalidate, max-age=0'
 	});
 
+	const loadedAt = new Date().toISOString();
 	const payload: MarketLivePayload = { ...FALLBACK };
 
-	const [coreSettled, fedWatch, macroReleaseAlerts] = await Promise.all([
+	const [coreSettled, fedWatchResult, macroReleaseAlertsResult] = await Promise.all([
 		Promise.allSettled([
 			loadYahooMarketTrack(),
 			loadTradingViewScanTrack(),
@@ -688,6 +736,9 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
 		loadFedWatchTiered(),
 		loadMacroReleaseAlerts()
 	]);
+
+	const fedWatch = fedWatchResult.data;
+	const macroReleaseAlerts = macroReleaseAlertsResult.data;
 
 	const [yahooResult, tvResult, cbResult, macroResult] = coreSettled;
 
@@ -759,20 +810,32 @@ export const load: PageServerLoad = async ({ setHeaders }) => {
 	const dataSources: DataSources = {
 		markets: combineMarketsSource(yahooSource, tvSource),
 		macro: macroSource,
-		centralBanks: centralBanksSource
+		centralBanks: centralBanksSource,
+		fedWatch: fedWatchResult.source,
+		releaseAlerts: macroReleaseAlertsResult.source
 	};
 
-	console.log('SUCCESS! Macro Data:', {
-		btc: payload.liveBitcoin,
-		effr: payload.effr,
-		sofr: payload.sofr,
-		us3m: payload.us3m,
-		us2y: payload.us2y,
-		us10y: payload.us10y,
-		spread2s10s: payload.spread2s10s,
-		de10y: payload.de10y,
-		dataSources
-	});
+	if (isDebugLoad()) {
+		console.log('SUCCESS! Macro Data:', {
+			btc: payload.liveBitcoin,
+			effr: payload.effr,
+			sofr: payload.sofr,
+			us3m: payload.us3m,
+			us2y: payload.us2y,
+			us10y: payload.us10y,
+			spread2s10s: payload.spread2s10s,
+			de10y: payload.de10y,
+			dataSources,
+			loadedAt
+		});
+	}
 
-	return { ...payload, centralBanks, fedWatch, macroReleaseAlerts, dataSources };
+	return {
+		...payload,
+		centralBanks,
+		fedWatch,
+		macroReleaseAlerts,
+		dataSources,
+		loadedAt
+	};
 };
