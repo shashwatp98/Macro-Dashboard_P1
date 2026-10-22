@@ -1,11 +1,14 @@
 import { FETCH_TIMEOUT_MS } from '$lib/services/constants';
 import type { CentralBanks, LiveAbsLevel, LiveQuote } from '$lib/types/market';
+import { normalizeEcbMroRate, parseUs3mYield } from './tvParse';
+
+export { normalizeEcbMroRate, parseUs3mYield } from './tvParse';
 
 const TRADINGVIEW_SCAN_URL = 'https://scanner.tradingview.com/global/scan';
 
 const TRADINGVIEW_SCAN_TICKERS = [
-	'TVC:US03M',
-	'FX_IDC:US02Y',
+	'TVC:US03MY',
+	'TVC:US02Y',
 	'ECONOMICS:USEFFR',
 	'CME:SR11!',
 	'TVC:DE10Y',
@@ -13,10 +16,15 @@ const TRADINGVIEW_SCAN_TICKERS = [
 	'TVC:AU10Y'
 ] as const;
 
-const TV_CB_QUOTE_SYMBOLS =
-	'ECONOMICS:USINTR,ECONOMICS:EUINTR,ECONOMICS:ININTR,ECONOMICS:JPINTR,ECONOMICS:CAINTR,ECONOMICS:GBINTR,ECONOMICS:AUINTR';
-
-const TV_CB_QUOTES_URL = `https://widgets.tradingview.com/api/v1/quotes?symbols=${TV_CB_QUOTE_SYMBOLS}`;
+const TV_CB_SCAN_TICKERS = [
+	'ECONOMICS:USINTR',
+	'ECONOMICS:EUINTR',
+	'ECONOMICS:ININTR',
+	'ECONOMICS:JPINTR',
+	'ECONOMICS:CAINTR',
+	'ECONOMICS:GBINTR',
+	'ECONOMICS:AUINTR'
+] as const;
 
 const CB_SYMBOL_SUFFIX_TO_KEY: Record<
 	'USINTR' | 'EUINTR' | 'ININTR' | 'JPINTR' | 'CAINTR' | 'GBINTR' | 'AUINTR',
@@ -32,9 +40,9 @@ const CB_SYMBOL_SUFFIX_TO_KEY: Record<
 };
 
 const TV_TICKER_TO_KEY: Record<string, 'us3m' | 'us2y' | 'effr' | 'de10y' | 'jp10y' | 'au10y'> = {
-	'TVC:US03M': 'us3m',
-	'FX_IDC:US02Y': 'us2y',
+	'TVC:US03MY': 'us3m',
 	'TVC:US02Y': 'us2y',
+	'FX_IDC:US02Y': 'us2y',
 	'ECONOMICS:USEFFR': 'effr',
 	'TVC:DE10Y': 'de10y',
 	'TVC:JP10Y': 'jp10y',
@@ -64,22 +72,6 @@ const TV_FETCH_HEADERS = {
 		'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 };
 
-type TvWidgetQuoteValues = {
-	lp?: number;
-	bid?: number;
-	ask?: number;
-	close?: number;
-	prev_close_price?: number;
-	[key: string]: unknown;
-};
-
-type TvWidgetQuotesResponse = {
-	results?: Array<{
-		s?: string;
-		v?: number | TvWidgetQuoteValues;
-	}>;
-};
-
 const CENTRAL_BANK_KEYS = [
 	'us',
 	'eu',
@@ -100,42 +92,10 @@ export const FALLBACK_CENTRAL_BANKS: CentralBanks = {
 	au: '4.35'
 };
 
-const roundMacroRate = (value: number, decimals = 2): number => {
-	const factor = 10 ** decimals;
-	return Math.round(value * factor) / factor;
-};
-
 const formatPolicyRate = (rate: number): string => rate.toFixed(2);
 
-/** EUINTR widgets feed often surfaces deposit facility; MRO = deposit + 15bp since Sep 2024. */
-export const normalizeEcbMroRate = (rate: number): number => {
-	const cents = Math.round(rate * 100);
-	if (cents % 25 === 0) {
-		return roundMacroRate(rate + 0.15);
-	}
-	return rate;
-};
-
-/** Live policy yield from nested quote fields — raw numeric `v` and `.close` are stale indexes. */
-const extractLivePolicyRate = (value: number | TvWidgetQuoteValues | undefined): number | null => {
-	if (typeof value === 'number' || !value || typeof value !== 'object') {
-		return null;
-	}
-
-	for (const field of ['lp', 'bid', 'ask'] as const) {
-		const candidate = value[field];
-		if (
-			typeof candidate === 'number' &&
-			Number.isFinite(candidate) &&
-			candidate >= 0 &&
-			candidate <= 30
-		) {
-			return candidate;
-		}
-	}
-
-	return null;
-};
+const isPlausiblePolicyRate = (value: number): boolean =>
+	Number.isFinite(value) && value >= 0 && value <= 30;
 
 export const validateCentralBanks = (banks: CentralBanks): CentralBanks => {
 	for (const key of CENTRAL_BANK_KEYS) {
@@ -145,21 +105,6 @@ export const validateCentralBanks = (banks: CentralBanks): CentralBanks => {
 		}
 	}
 	return banks;
-};
-
-/** TVC:US03M — 3-Month T-Bill yield close and daily % change. */
-const parseUs03M = (row: (number | null)[]): LiveQuote | null => {
-	const parsedUS03MPrice = row[0];
-	const parsedUS03MChange = row[1];
-
-	if (typeof parsedUS03MPrice !== 'number') {
-		return null;
-	}
-
-	return {
-		price: parsedUS03MPrice,
-		changePct: typeof parsedUS03MChange === 'number' ? parsedUS03MChange : 0
-	};
 };
 
 /** CME SOFR futures: implied rate = 100 − index; invert contract % change for rate direction. */
@@ -228,7 +173,7 @@ const parseTradingViewRow = (
 export const fetchTradingViewScan = async (): Promise<TradingViewScanData> => {
 	const response = await fetch(TRADINGVIEW_SCAN_URL, {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
+		headers: { 'Content-Type': 'application/json', ...TV_FETCH_HEADERS },
 		body: JSON.stringify({
 			symbols: {
 				tickers: [...TRADINGVIEW_SCAN_TICKERS],
@@ -247,8 +192,8 @@ export const fetchTradingViewScan = async (): Promise<TradingViewScanData> => {
 	const macro: TradingViewScanData = {};
 
 	for (const entry of json.data ?? []) {
-		if (entry.s === 'TVC:US03M') {
-			const us3m = parseUs03M(entry.d);
+		if (entry.s === 'TVC:US03MY' || entry.s === 'TVC:US03M') {
+			const us3m = parseUs3mYield(entry.d);
 			if (us3m) {
 				macro.us3m = us3m;
 			}
@@ -288,18 +233,27 @@ export const fetchTradingViewScan = async (): Promise<TradingViewScanData> => {
 export const fetchCentralBankRates = async (): Promise<CentralBanks> => {
 	const rates: CentralBanks = { ...FALLBACK_CENTRAL_BANKS };
 
-	const cbResponse = await fetch(TV_CB_QUOTES_URL, {
-		headers: TV_FETCH_HEADERS,
+	const cbResponse = await fetch(TRADINGVIEW_SCAN_URL, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json', ...TV_FETCH_HEADERS },
+		body: JSON.stringify({
+			symbols: {
+				tickers: [...TV_CB_SCAN_TICKERS],
+				query: { types: [] }
+			},
+			columns: ['close']
+		}),
 		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
 	});
 
 	if (!cbResponse.ok) {
-		throw new Error(`TradingView CB quotes responded with ${cbResponse.status}`);
+		throw new Error(`TradingView CB scanner responded with ${cbResponse.status}`);
 	}
 
-	const json = (await cbResponse.json()) as TvWidgetQuotesResponse;
+	const json = (await cbResponse.json()) as TradingViewScanResponse;
+	let liveCount = 0;
 
-	for (const entry of json.results ?? []) {
+	for (const entry of json.data ?? []) {
 		const suffix = entry.s?.split(':')[1] as keyof typeof CB_SYMBOL_SUFFIX_TO_KEY | undefined;
 		if (!suffix) {
 			continue;
@@ -310,11 +264,18 @@ export const fetchCentralBankRates = async (): Promise<CentralBanks> => {
 			continue;
 		}
 
-		const rate = extractLivePolicyRate(entry.v);
-		if (rate !== null) {
-			const normalized = key === 'eu' ? normalizeEcbMroRate(rate) : rate;
-			rates[key] = formatPolicyRate(normalized);
+		const close = entry.d?.[0];
+		if (typeof close !== 'number' || !isPlausiblePolicyRate(close)) {
+			continue;
 		}
+
+		const normalized = key === 'eu' ? normalizeEcbMroRate(close) : close;
+		rates[key] = formatPolicyRate(normalized);
+		liveCount += 1;
+	}
+
+	if (liveCount === 0) {
+		throw new Error('TradingView CB scanner returned no usable policy rates');
 	}
 
 	return validateCentralBanks(rates);

@@ -2,6 +2,7 @@ import { FETCH_TIMEOUT_MS } from '$lib/services/constants';
 import {
 	classifyKalshiMarket,
 	pickDominantKalshiAction,
+	pickNextKalshiFedEvent,
 	type KalshiBucketTotals
 } from '$lib/services/kalshi';
 import {
@@ -48,7 +49,6 @@ export type { CentralBanks, MacroBlock, MacroStatus, DataSourceTag, DataSources 
 const FAST_TRACK_CACHE_TTL_MS = 30 * 1000;
 const CB_CACHE_TTL_MS = 4 * 60 * 60 * 1000;
 const MACRO_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
-const FED_WATCH_CACHE_TTL_MS = 60 * 60 * 1000;
 const RELEASE_WINDOW_TZ = 'America/New_York';
 const RELEASE_WINDOW_START_MIN = 8 * 60 + 29;
 const RELEASE_WINDOW_END_MIN = 8 * 60 + 35;
@@ -138,6 +138,7 @@ const FOMC_DECISION_DATES = [
 	'2026-06-17',
 	'2026-07-29',
 	'2026-09-17',
+	'2026-10-29',
 	'2026-11-05',
 	'2026-12-16',
 	'2027-01-27',
@@ -187,7 +188,16 @@ const FALLBACK_FED_WATCH: FedWatch = {
 	probability: '98.0%'
 };
 
-const KALSHI_API_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
+const KALSHI_API_BASES = [
+	'https://api.elections.kalshi.com/trade-api/v2',
+	'https://api.kalshi.com/trade-api/v2'
+] as const;
+
+const KALSHI_FETCH_HEADERS = {
+	Accept: 'application/json',
+	'User-Agent':
+		'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+};
 
 type KalshiMarket = {
 	subtitle?: string;
@@ -200,6 +210,13 @@ type KalshiMarket = {
 
 type KalshiMarketsResponse = {
 	markets?: KalshiMarket[];
+};
+
+type KalshiEventsResponse = {
+	events?: Array<{
+		event_ticker?: string;
+		strike_date?: string;
+	}>;
 };
 
 const KALSHI_MONTH_CODES = [
@@ -240,11 +257,49 @@ const parseKalshiProbability = (market: KalshiMarket): number => {
 
 const classifyKalshiMarketFromApi = classifyKalshiMarket;
 
-const fetchKalshiFedWatch = async (decisionIso: string): Promise<FedWatch> => {
-	const eventTicker = toKalshiEventTicker(decisionIso);
-	const url = `${KALSHI_API_BASE}/markets?event_ticker=${encodeURIComponent(eventTicker)}&limit=50`;
+const parseKalshiMarkets = (
+	markets: KalshiMarket[],
+	decisionIso: string,
+	eventTicker: string
+): FedWatch => {
+	const openMarkets = markets.filter((market) => market.status !== 'closed');
+
+	const buckets: KalshiBucketTotals = {
+		HOLD: 0,
+		CUT: 0,
+		HIKE: 0
+	};
+
+	for (const market of openMarkets) {
+		const bucket = classifyKalshiMarketFromApi(market);
+		if (!bucket) {
+			continue;
+		}
+		buckets[bucket] += parseKalshiProbability(market);
+	}
+
+	const total = buckets.HOLD + buckets.CUT + buckets.HIKE;
+	if (total <= 0) {
+		throw new Error(`Kalshi returned no usable markets for ${eventTicker}`);
+	}
+
+	const dominant = pickDominantKalshiAction(buckets);
+
+	return {
+		meetingDate: formatFomcMeetingDate(decisionIso),
+		action: dominant.action,
+		probability: `${dominant.probability.toFixed(1)}%`
+	};
+};
+
+const fetchKalshiFedWatchFromBase = async (
+	base: string,
+	decisionIso: string,
+	eventTicker: string
+): Promise<FedWatch> => {
+	const url = `${base}/markets?event_ticker=${encodeURIComponent(eventTicker)}&limit=50`;
 	const response = await fetch(url, {
-		headers: { Accept: 'application/json' },
+		headers: KALSHI_FETCH_HEADERS,
 		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
 	});
 
@@ -253,51 +308,60 @@ const fetchKalshiFedWatch = async (decisionIso: string): Promise<FedWatch> => {
 	}
 
 	const json = (await response.json()) as KalshiMarketsResponse;
-	const markets = (json.markets ?? []).filter((market) => market.status !== 'closed');
+	return parseKalshiMarkets(json.markets ?? [], decisionIso, eventTicker);
+};
 
-	const buckets: KalshiBucketTotals = {
-		HOLD: 0,
-		CUT: 0,
-		HIKE: 0
-	};
+const fetchNextKalshiFedEventFromBase = async (
+	base: string
+): Promise<{ eventTicker: string; decisionIso: string }> => {
+	const url = `${base}/events?series_ticker=KXFEDDECISION&limit=20&status=open`;
+	const response = await fetch(url, {
+		headers: KALSHI_FETCH_HEADERS,
+		signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+	});
 
-	for (const market of markets) {
-		const bucket = classifyKalshiMarketFromApi(market);
-		if (!bucket) {
-			continue;
+	if (!response.ok) {
+		throw new Error(`Kalshi Fed events API responded with ${response.status}`);
+	}
+
+	const json = (await response.json()) as KalshiEventsResponse;
+	const next = pickNextKalshiFedEvent(json.events ?? [], getTodayEtIsoDate());
+	if (!next) {
+		throw new Error('Kalshi returned no upcoming Fed decision events');
+	}
+	return next;
+};
+
+const fetchKalshiFedWatchFromCalendar = async (base: string): Promise<FedWatch> => {
+	const decisionIso = getNextFomcDecisionDate();
+	return fetchKalshiFedWatchFromBase(base, decisionIso, toKalshiEventTicker(decisionIso));
+};
+
+const fetchKalshiFedWatch = async (): Promise<FedWatch> => {
+	let lastError: unknown;
+
+	for (const base of KALSHI_API_BASES) {
+		try {
+			const nextEvent = await fetchNextKalshiFedEventFromBase(base);
+			return await fetchKalshiFedWatchFromBase(base, nextEvent.decisionIso, nextEvent.eventTicker);
+		} catch (error) {
+			lastError = error;
+			try {
+				return await fetchKalshiFedWatchFromCalendar(base);
+			} catch (calendarError) {
+				lastError = calendarError;
+			}
 		}
-		buckets[bucket] += parseKalshiProbability(market);
 	}
 
-	const meetingDate = formatFomcMeetingDate(decisionIso);
-	const total = buckets.HOLD + buckets.CUT + buckets.HIKE;
-	if (total <= 0) {
-		throw new Error(`Kalshi returned no usable markets for ${eventTicker}`);
-	}
-
-	let action: FedWatchAction = 'HOLD';
-	let probability = buckets.HOLD;
-	const dominant = pickDominantKalshiAction(buckets);
-	action = dominant.action;
-	probability = dominant.probability;
-
-	return {
-		meetingDate,
-		action,
-		probability: `${probability.toFixed(1)}%`
-	};
+	throw lastError instanceof Error ? lastError : new Error('Kalshi Fed Watch fetch failed');
 };
 
 const buildFedWatchSnapshot = async (): Promise<FedWatch> => {
-	const decisionDate = getNextFomcDecisionDate();
-	return fetchKalshiFedWatch(decisionDate);
+	return fetchKalshiFedWatch();
 };
 
 const loadFedWatchTiered = async (): Promise<TrackResult<FedWatch>> => {
-	if (isTieredCacheFresh(fedWatchCache, FED_WATCH_CACHE_TTL_MS)) {
-		return { data: fedWatchCache.data, source: 'cache' };
-	}
-
 	try {
 		const fedWatch = await buildFedWatchSnapshot();
 		fedWatchCache = { at: Date.now(), data: fedWatch };
@@ -540,20 +604,20 @@ const loadMacroReleaseAlerts = async (): Promise<TrackResult<MacroReleaseAlert[]
 };
 
 const loadCentralBankRatesTiered = async (): Promise<TrackResult<CentralBanks>> => {
-	if (isTieredCacheFresh(centralBanksCache, CB_CACHE_TTL_MS)) {
-		return { data: centralBanksCache.data, source: 'cache' };
-	}
-
 	try {
 		const rates = await fetchCentralBankRates();
 		centralBanksCache = { at: Date.now(), data: rates };
 		return { data: rates, source: 'live' };
 	} catch (error) {
-		if (centralBanksCache) {
-			console.warn('TradingView CB Quotes Fetch Failed — serving cached policy rates:', error);
+		if (isTieredCacheFresh(centralBanksCache, CB_CACHE_TTL_MS)) {
+			console.warn('TradingView CB scanner fetch failed — serving cached policy rates:', error);
 			return { data: centralBanksCache.data, source: 'cache' };
 		}
-		console.error('TradingView CB Quotes Fetch Failed:', error);
+		if (centralBanksCache) {
+			console.warn('TradingView CB scanner fetch failed — serving last policy rates:', error);
+			return { data: centralBanksCache.data, source: 'cache' };
+		}
+		console.error('TradingView CB scanner fetch failed:', error);
 		return { data: { ...FALLBACK_CENTRAL_BANKS }, source: 'fallback' };
 	}
 };

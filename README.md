@@ -20,10 +20,10 @@ Four data tracks run concurrently on every server `load()`:
 | ----------------- | ----------------------- | ----------------------------------- |
 | Markets (Yahoo)   | Yahoo Finance chart API | 30s stale-on-failure                |
 | Markets (TV scan) | TradingView scanner     | 30s stale-on-failure                |
-| Central banks     | TradingView CB quotes   | 4 hours                             |
+| Central banks     | TradingView scanner     | stale-on-failure                    |
 | Macro             | FRED JSON/CSV           | 12 hours (bypassed 8:29–8:35 AM ET) |
 
-Also in parallel: Kalshi Fed Watch (1h cache), macro release schedule (24h cache).
+Also in parallel: Kalshi Fed Watch (stale-on-failure), macro release schedule (24h cache).
 
 Client refreshes via `invalidateAll()` every 15s when the tab is visible (`PUBLIC_REFRESH_ENABLED`).
 
@@ -35,12 +35,12 @@ src/lib/components/   UI panels (MacroTable, PolicyStrip, YieldCurveInline, …)
 
 ## Data sources & disclaimers
 
-| Source        | Use                                        | Note                              |
-| ------------- | ------------------------------------------ | --------------------------------- |
-| Yahoo Finance | Equities, commodities, FX, BTC, US 10Y/30Y | Unofficial chart API              |
-| TradingView   | EFFR, SOFR, yields, CB rates               | Scanner + widget endpoints        |
-| FRED          | Macro observations + release calendar      | Requires API key for best results |
-| Kalshi        | FOMC decision probabilities                | Public prediction market API      |
+| Source        | Use                                        | Note                                |
+| ------------- | ------------------------------------------ | ----------------------------------- |
+| Yahoo Finance | Equities, commodities, FX, BTC, US 10Y/30Y | Unofficial chart API                |
+| TradingView   | EFFR, SOFR, yields, CB rates               | Scanner (`scanner.tradingview.com`) |
+| FRED          | Macro observations + release calendar      | Requires API key for best results   |
+| Kalshi        | FOMC decision probabilities                | Public prediction market API        |
 
 Macro **forecasts** are manually maintained placeholders in `src/lib/config/macro-forecasts.ts` — not live consensus. OUTCOME labels compare actual prints vs these static values.
 

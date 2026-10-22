@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
 	classifyKalshiMarket,
 	pickDominantKalshiAction,
+	pickNextKalshiFedEvent,
 	type KalshiBucketTotals
 } from './kalshi.ts';
 
@@ -38,5 +39,32 @@ describe('pickDominantKalshiAction', () => {
 			action: 'HOLD',
 			probability: 60
 		});
+	});
+});
+
+describe('pickNextKalshiFedEvent', () => {
+	it('picks the soonest open meeting on or after today', () => {
+		const next = pickNextKalshiFedEvent(
+			[
+				{ event_ticker: 'KXFEDDECISION-26SEP', strike_date: '2026-09-17T18:00:00Z' },
+				{ event_ticker: 'KXFEDDECISION-26OCT', strike_date: '2026-10-28T18:00:00Z' },
+				{ event_ticker: 'KXFEDDECISION-26DEC', strike_date: '2026-12-09T19:00:00Z' }
+			],
+			'2026-10-22'
+		);
+		assert.deepEqual(next, {
+			eventTicker: 'KXFEDDECISION-26OCT',
+			decisionIso: '2026-10-28'
+		});
+	});
+
+	it('returns null when no future events exist', () => {
+		assert.equal(
+			pickNextKalshiFedEvent(
+				[{ event_ticker: 'KXFEDDECISION-26SEP', strike_date: '2026-09-17T18:00:00Z' }],
+				'2026-10-22'
+			),
+			null
+		);
 	});
 });

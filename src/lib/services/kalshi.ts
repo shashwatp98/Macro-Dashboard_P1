@@ -25,6 +25,33 @@ export const classifyKalshiMarket = (market: KalshiMarketLabel): KalshiBucket | 
 
 export type KalshiBucketTotals = Record<KalshiBucket, number>;
 
+export type KalshiEventRef = {
+	event_ticker?: string;
+	strike_date?: string;
+};
+
+/** Pick the soonest Kalshi Fed event whose strike date is today or later. */
+export const pickNextKalshiFedEvent = (
+	events: KalshiEventRef[],
+	todayIso: string
+): { eventTicker: string; decisionIso: string } | null => {
+	const upcoming = events
+		.map((event) => {
+			const eventTicker = event.event_ticker?.trim();
+			const decisionIso = event.strike_date?.slice(0, 10);
+			if (!eventTicker || !decisionIso) {
+				return null;
+			}
+			return { eventTicker, decisionIso };
+		})
+		.filter((event): event is { eventTicker: string; decisionIso: string } => {
+			return event !== null && event.decisionIso >= todayIso;
+		})
+		.sort((a, b) => a.decisionIso.localeCompare(b.decisionIso));
+
+	return upcoming[0] ?? null;
+};
+
 /** Pick dominant FOMC action from aggregated Kalshi bucket probabilities. */
 export const pickDominantKalshiAction = (
 	buckets: KalshiBucketTotals

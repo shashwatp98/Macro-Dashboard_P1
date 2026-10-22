@@ -67,7 +67,7 @@ UI does not call external APIs directly. Raw fetch/parse/normalize logic belongs
 | Provider                | Service module                                                 | Data                                                                                                                          |
 | ----------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | **Yahoo Finance**       | `yahoo.ts` — batch `YAHOO_BATCH_SYMBOLS` + per-symbol fallback | BTC, SPX, NDX, DJI, FTSE, NSE, CSI 300, Gold, Silver, Brent (`BZ=F`), DXY, USD/JPY, USD/INR, US 10Y (`^TNX`), US 30Y (`^TYX`) |
-| **TradingView scanner** | `tradingview.ts` — POST `scanner.tradingview.com/global/scan`  | EFFR, SOFR (CME SR11 implied), US 3M, US 2Y, DE/JP/AU 10Y                                                                     |
+| **TradingView scanner** | `tradingview.ts` — POST `scanner.tradingview.com/global/scan`  | EFFR, SOFR (CME SR11 implied), US 3M (`TVC:US03MY`), US 2Y (`TVC:US02Y`), DE/JP/AU 10Y                                        |
 
 **Derived on server:** `spread2s10s` (10Y − 2Y), `spread10s30s` (30Y − 10Y) via `computeYieldSpreads()` in `yieldSpreads.ts`.
 
@@ -77,11 +77,11 @@ UI does not call external APIs directly. Raw fetch/parse/normalize logic belongs
 
 ### Slow Track — 4-hour server cache
 
-| Provider                  | Service module   | Data                                           |
-| ------------------------- | ---------------- | ---------------------------------------------- |
-| **TradingView CB quotes** | `tradingview.ts` | Fed, ECB, RBI, BoJ, BoC, BoE, RBA policy rates |
+| Provider                   | Service module   | Data                                           |
+| -------------------------- | ---------------- | ---------------------------------------------- |
+| **TradingView CB scanner** | `tradingview.ts` | Fed, ECB, RBI, BoJ, BoC, BoE, RBA policy rates |
 
-**ECB rule (do not change):** `EUINTR` widget often surfaces deposit facility rate. MRO = deposit + 15bp since Sep 2024 (`normalizeEcbMroRate` in `tradingview.ts`).
+**ECB rule (do not change):** `EUINTR` often surfaces deposit facility rate. MRO = deposit + 15bp since Sep 2024 (`normalizeEcbMroRate` in `tradingview.ts`).
 
 ### Macro Track — 12-hour server cache
 
@@ -98,13 +98,13 @@ UI does not call external APIs directly. Raw fetch/parse/normalize logic belongs
 
 **Fallback:** `OFFICIAL_MACRO_2026` baseline bundle in `fred.ts` used when FRED fetch fails and no macro cache exists.
 
-### Fed Watch — 1-hour server cache
+### Fed Watch — stale-on-failure
 
 | Provider   | Data                                                                       |
 | ---------- | -------------------------------------------------------------------------- |
 | **Kalshi** | `KXFEDDECISION-{YY}{MON}` markets — next FOMC meeting dominant probability |
 
-Kalshi classification in `src/lib/services/kalshi.ts`. Orchestration in `+page.server.ts`. Ribbon shows `FOMC [Kalshi]` with `SourceBadge` for freshness.
+Kalshi is fetched on every load (same pattern as Yahoo/TV fast track). Cache is used only when the live call fails. Classification in `src/lib/services/kalshi.ts`. Ribbon shows `FOMC [Kalshi]` with `SourceBadge` for freshness.
 
 ### Macro Release Alerts — 24-hour schedule cache
 
@@ -123,10 +123,10 @@ In-memory caches in `+page.server.ts` (per serverless instance on Vercel):
 ```
 yahooMarketCache       — TTL 30s  (stale-on-failure + circuit breaker)
 tradingViewScanCache   — TTL 30s  (stale-on-failure + circuit breaker)
-centralBanksCache      — TTL 4 hours
+centralBanksCache      — stale-on-failure (scanner; last-good cache on failure)
 macroBlocksCache       — TTL 12 hours (bypassed 8:29–8:35 AM ET)
 macroReleaseDatesCache — TTL 24 hours
-fedWatchCache          — TTL 1 hour
+fedWatchCache          — stale-on-failure (live fetch every load)
 ```
 
 ### Parallel load
